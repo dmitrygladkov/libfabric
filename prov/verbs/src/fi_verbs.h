@@ -110,6 +110,13 @@
 #define VERBS_DEF_CQ_SIZE 1024
 #define VERBS_MR_IOV_LIMIT 1
 
+#define FI_IBV_IS_IB_UD_ADDR(addr, addrlen)			\
+	(addr						&&	\
+	 (sizeof(struct ofi_ib_ud_ep_name) == addrlen)	&&	\
+	 fi_ibv_dgram_verify_ib_ud_name_checksum(		\
+		(struct ofi_ib_ud_ep_name *)addr))
+
+
 extern struct fi_provider fi_ibv_prov;
 extern struct util_prov fi_ibv_util_prov;
 
@@ -147,6 +154,80 @@ struct verbs_addr {
 	struct dlist_entry entry;
 	struct rdma_addrinfo *rai;
 };
+
+/*
+ * fields of Infiniband packet headers that are used to
+ * represent OFI EP address
+ * - LRH (Local Route Header) - Link Layer:
+ *   - LID - destination Local Identifier
+ *   - SL - Service Level
+ * - GRH (Global Route Header) - Network Layer:
+ *   - GID - destination Global Identifier
+ * - BTH (Base Transport Header) - Transport Layer:
+ *   - QPN - destination Queue Oair number
+ *   - P_key - Partition Key
+ *
+ * Note: DON'T change the placement of the fields in the structure.
+ *       The placement is to keep structure size = 256 bits (32 byte).
+ */
+struct ofi_ib_ud_ep_name {
+	union ibv_gid	gid;		/* 64-bit GUID + 64-bit EUI - GRH */
+
+	uint32_t	qpn;		/* BTH */
+
+	uint16_t	lid; 		/* LRH */
+	uint16_t	pkey;		/* BTH */
+	uint16_t	service;	/* for NS src addr, 0 means any */
+
+	uint8_t 	sl;		/* LRH */
+	uint8_t		padding[3];	/* forced padding to 256 bits (32 byte) */
+
+	uint16_t	checksum;	/* to check compliance of ep_name */
+}; /* 256 bits */
+
+#define VERBS_IB_UD_NS_ANY_SERVICE	0
+
+static inline uint16_t
+fi_ibv_dgram_calc_ib_ud_name_checksum(struct ofi_ib_ud_ep_name *ep_name)
+{
+	uint8_t *begin = (uint8_t *)ep_name;
+	uint8_t *end = begin + offsetof(struct ofi_ib_ud_ep_name, checksum);
+	uint16_t checksum = 0, first_half, second_half;
+
+	for (; begin != end; begin++)
+		checksum += *begin;
+
+	first_half = (uint8_t)(checksum >> 16);
+	while (first_half) {
+		second_half = (uint8_t)((checksum << 16) >> 16);
+		checksum = first_half + second_half;
+		first_half = (uint8_t)(checksum >> 16);
+	}
+	return ~checksum;
+}
+
+static inline
+int fi_ibv_dgram_verify_ib_ud_name_checksum(struct ofi_ib_ud_ep_name *ep_name)
+{
+	return (fi_ibv_dgram_calc_ib_ud_name_checksum(ep_name) == ep_name->checksum);
+}
+
+static inline
+int fi_ibv_dgram_ns_is_service_wildcard(void *svc)
+{
+	return (*(int *)svc == VERBS_IB_UD_NS_ANY_SERVICE);
+}
+
+static inline
+int fi_ibv_dgram_ns_service_cmp(void *svc1, void *svc2)
+{
+	int service1 = *(int *)svc1, service2 = *(int *)svc2;
+
+	if (fi_ibv_dgram_ns_is_service_wildcard(svc1) ||
+	    fi_ibv_dgram_ns_is_service_wildcard(svc2))
+		return 0;
+	return (service1 < service2) ? -1 : (service1 > service2);
+}
 
 struct verbs_dev_info {
 	struct dlist_entry entry;
