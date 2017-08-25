@@ -118,12 +118,10 @@ struct fi_fabric_attr mlx_fabric_attrs = {
 struct fi_ep_attr mlx_ep_attrs = {
 	.type = FI_EP_RDM,
 	.protocol = FI_PROTO_MLX,
-#ifdef UCP_API_RELEASE
-#if (UCP_API_RELEASE == 2947)
+#if defined(UCP_API_RELEASE) && (UCP_API_RELEASE <= 2947)
 #warning "HPCX 1.9.7 have an issue with UCP_API_VERSION macro"
 	.protocol_version = (((UCP_API_MAJOR) << UCP_VERSION_MAJOR_SHIFT)|
         ((UCP_API_MINOR) << UCP_VERSION_MINOR_SHIFT)),
-#endif
 #else
 	.protocol_version = (UCP_API_VERSION),
 #endif
