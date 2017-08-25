@@ -32,7 +32,7 @@
 #include "mlx.h"
 
 
-int mlx_errcode_translation_table[(-UCS_ERR_LAST)+2];
+int mlx_errcode_translation_table[(-UCS_ERR_LAST)+2] = { -FI_EOTHER };
 
 struct mlx_global_descriptor mlx_descriptor = {
 	.config = NULL,
@@ -40,7 +40,6 @@ struct mlx_global_descriptor mlx_descriptor = {
 
 static int mlx_init_errcodes()
 {
-	memset(mlx_errcode_translation_table, -FI_EOTHER, (-UCS_ERR_LAST)+2);
 	MLX_TRANSLATE_ERRCODE (UCS_OK)                  = -FI_SUCCESS;
 	MLX_TRANSLATE_ERRCODE (UCS_INPROGRESS)          = -FI_EINPROGRESS;
 	MLX_TRANSLATE_ERRCODE (UCS_ERR_NO_MESSAGE)      = -FI_ENOMSG;
