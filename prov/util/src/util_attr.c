@@ -562,13 +562,15 @@ int ofi_check_ep_attr(const struct util_prov *util_prov, uint32_t api_version,
 	const struct fi_ep_attr *prov_attr = prov_info->ep_attr;
 	const struct fi_provider *prov = util_prov->prov;
 
-	if (user_attr->type && (user_attr->type != prov_attr->type)) {
+	if ((user_attr->type != FI_EP_UNSPEC) &&
+	    (user_attr->type != prov_attr->type)) {
 		FI_INFO(prov, FI_LOG_CORE, "Unsupported endpoint type\n");
 		FI_INFO_CHECK(prov, prov_attr, user_attr, type, FI_TYPE_EP_TYPE);
 		return -FI_ENODATA;
 	}
 
-	if (user_attr->protocol && (user_attr->protocol != prov_attr->protocol)) {
+	if ((user_attr->protocol != FI_PROTO_UNSPEC) &&
+	    (user_attr->protocol != prov_attr->protocol)) {
 		FI_INFO(prov, FI_LOG_CORE, "Unsupported protocol\n");
 		FI_INFO_CHECK(prov, prov_attr, user_attr, protocol, FI_TYPE_PROTOCOL);
 		return -FI_ENODATA;
@@ -620,6 +622,33 @@ int ofi_check_ep_attr(const struct util_prov *util_prov, uint32_t api_version,
 		}
 	}
 
+	if (user_attr->max_order_raw_size &&
+	    (user_attr->max_order_raw_size > prov_attr->max_order_raw_size)) {
+		FI_INFO(prov, FI_LOG_CORE,
+			"Max order RAW size exceeds supported size\n");
+		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
+				  max_order_raw_size);
+		return -FI_ENODATA;
+	}
+
+	if (user_attr->max_order_war_size &&
+	    (user_attr->max_order_war_size > prov_attr->max_order_war_size)) {
+		FI_INFO(prov, FI_LOG_CORE,
+			"Max order WAR size exceeds supported size\n");
+		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
+				  max_order_war_size);
+		return -FI_ENODATA;
+	}
+
+	if (user_attr->max_order_waw_size &&
+	    (user_attr->max_order_waw_size > prov_attr->max_order_waw_size)) {
+		FI_INFO(prov, FI_LOG_CORE,
+			"Max order WAW size exceeds supported size\n");
+		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
+				  max_order_waw_size);
+		return -FI_ENODATA;
+	}
+
 	if (user_attr->auth_key_size &&
 	    (user_attr->auth_key_size != prov_attr->auth_key_size)) {
 		FI_INFO(prov, FI_LOG_CORE, "Unsupported authentification size.");
@@ -631,9 +660,12 @@ int ofi_check_ep_attr(const struct util_prov *util_prov, uint32_t api_version,
 }
 
 int ofi_check_rx_attr(const struct fi_provider *prov,
-		      const struct fi_rx_attr *prov_attr,
+		      const struct fi_info *prov_info,
 		      const struct fi_rx_attr *user_attr, uint64_t info_mode)
 {
+	const struct fi_rx_attr *prov_attr = prov_info->rx_attr;
+	int rm_enabled = (prov_info->domain_attr->resource_mgmt == FI_RM_ENABLED);
+
 	if (user_attr->caps & ~(prov_attr->caps)) {
 		FI_INFO(prov, FI_LOG_CORE, "caps not supported\n");
 		FI_INFO_CHECK(prov, prov_attr, user_attr, caps, FI_TYPE_CAPS);
@@ -687,13 +719,24 @@ int ofi_check_rx_attr(const struct fi_provider *prov,
 		return -FI_ENODATA;
 	}
 
+	if (!rm_enabled &&
+	    user_attr->total_buffered_recv > prov_attr->total_buffered_recv) {
+		FI_INFO(prov, FI_LOG_CORE,
+			"Total buffered recv size exceeds supported size\n");
+		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
+				  total_buffered_recv);
+		return -FI_ENODATA;
+	}
+
 	return 0;
 }
 
 int ofi_check_tx_attr(const struct fi_provider *prov,
-		      const struct fi_tx_attr *prov_attr,
+		      const struct fi_info *prov_info,
 		      const struct fi_tx_attr *user_attr, uint64_t info_mode)
 {
+	const struct fi_tx_attr *prov_attr = prov_info->tx_attr;
+
 	if (user_attr->caps & ~(prov_attr->caps)) {
 		FI_INFO(prov, FI_LOG_CORE, "caps not supported\n");
 		FI_INFO_CHECK(prov, prov_attr, user_attr, caps, FI_TYPE_CAPS);
@@ -875,14 +918,14 @@ int ofi_check_info(const struct util_prov *util_prov,
 	}
 
 	if (user_info->rx_attr) {
-		ret = ofi_check_rx_attr(prov, prov_info->rx_attr,
+		ret = ofi_check_rx_attr(prov, prov_info,
 					user_info->rx_attr, user_info->mode);
 		if (ret)
 			return ret;
 	}
 
 	if (user_info->tx_attr) {
-		ret = ofi_check_tx_attr(prov, prov_info->tx_attr,
+		ret = ofi_check_tx_attr(prov, prov_info,
 					user_info->tx_attr, user_info->mode);
 		if (ret)
 			return ret;
