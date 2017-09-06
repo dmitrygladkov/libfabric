@@ -60,6 +60,12 @@ struct fi_provider fi_ibv_prov = {
 	.cleanup = fi_ibv_fini
 };
 
+struct util_prov fi_ibv_util_prov = {
+	.prov = &fi_ibv_prov,
+	.info = NULL,
+	.flags = UTIL_RX_SHARED_CTX,
+};
+
 int fi_ibv_sockaddr_len(struct sockaddr *addr)
 {
 	if (!addr)

@@ -36,13 +36,13 @@
 #include "fi_verbs.h"
 
 struct fi_info *
-fi_ibv_get_verbs_info(struct fi_info *ilist, const char *domain_name)
+fi_ibv_get_verbs_info(const struct fi_info *ilist, const char *domain_name)
 {
-	struct fi_info *fi;
+	const struct fi_info *fi;
 
 	for (fi = ilist; fi; fi = fi->next) {
 		if (!strcmp(fi->domain_attr->name, domain_name))
-			return fi;
+		    return (void *)fi;
 	}
 
 	return NULL;
@@ -90,7 +90,7 @@ fi_ibv_eq_cm_getinfo(struct fi_ibv_fabric *fab, struct rdma_cm_event *event,
 	const char *devname = ibv_get_device_name(event->id->verbs->device);
 
 	if (strcmp(devname, fab->info->domain_attr->name)) {
-		fi = fi_ibv_get_verbs_info(fab->all_infos, devname);
+		fi = fi_ibv_get_verbs_info(fi_ibv_util_prov.info, devname);
 		if (!fi)
 			return NULL;
 	} else {
