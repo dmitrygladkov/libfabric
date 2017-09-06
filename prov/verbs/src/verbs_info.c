@@ -146,9 +146,15 @@ struct fi_ibv_rdm_sysaddr
 };
 
 int fi_ibv_check_ep_attr(const struct fi_ep_attr *attr,
-			 const struct fi_info *info)
+			 const struct fi_info *info,
+			 int srx_ctx_support)
 {
 	struct fi_ep_attr user_attr = *attr;
+	struct util_prov tmp_util_prov = {
+		.prov = &fi_ibv_prov,
+		.info = NULL,
+		.flags = srx_ctx_support ? UTIL_RX_SHARED_CTX : 0,
+	};
 
 	switch (attr->protocol) {
 	case FI_PROTO_UNSPEC:
@@ -164,15 +170,16 @@ int fi_ibv_check_ep_attr(const struct fi_ep_attr *attr,
 		return -FI_ENODATA;
 	}
 
-	return ofi_check_ep_attr(&fi_ibv_util_prov,
+	return ofi_check_ep_attr(&tmp_util_prov,
 				 info->fabric_attr->api_version,
 				 info, &user_attr);
 }
 
 int fi_ibv_check_rx_attr(const struct fi_rx_attr *attr,
-			 const struct fi_info *hints, struct fi_info *info)
+			 const struct fi_info *hints,
+			 struct fi_info *info)
 {
-	uint64_t saved_prov_mode = info->rx_attr->mode;
+	uint64_t saved_prov_mode = info->rx_attr->mode;	
 	int ret;
 
 	info->rx_attr->mode = (hints->caps & FI_RMA) ?
@@ -187,7 +194,7 @@ int fi_ibv_check_rx_attr(const struct fi_rx_attr *attr,
 }
 
 static int fi_ibv_check_hints(uint32_t version, const struct fi_info *hints,
-			      struct fi_info *info)
+			      struct fi_info *info, int srx_ctx_support)
 {
 	int ret;
 	uint64_t prov_mode;
@@ -221,13 +228,15 @@ static int fi_ibv_check_hints(uint32_t version, const struct fi_info *hints,
 	}
 
 	if (hints->ep_attr) {
-		ret = fi_ibv_check_ep_attr(hints->ep_attr, info);
+		ret = fi_ibv_check_ep_attr(hints->ep_attr, info,
+					   srx_ctx_support);
 		if (ret)
 			return ret;
 	}
 
 	if (hints->rx_attr) {
-		ret = fi_ibv_check_rx_attr(hints->rx_attr, hints, info);
+		ret = fi_ibv_check_rx_attr(hints->rx_attr, hints,
+					   info);
 		if (ret)
 			return ret;
 	}
@@ -239,7 +248,7 @@ static int fi_ibv_check_hints(uint32_t version, const struct fi_info *hints,
 			return ret;
 	}
 
-	return 0;
+	return FI_SUCCESS;
 }
 
 int fi_ibv_fi_to_rai(const struct fi_info *fi, uint64_t flags,
@@ -377,7 +386,9 @@ err1:
 	return ret;
 }
 
-static int fi_ibv_get_device_attrs(struct ibv_context *ctx, struct fi_info *info)
+static int fi_ibv_get_device_attrs(struct ibv_context *ctx,
+				   struct fi_info *info,
+				   int *srq_support)
 {
 	struct ibv_device_attr device_attr;
 	struct ibv_port_attr port_attr;
@@ -391,11 +402,15 @@ static int fi_ibv_get_device_attrs(struct ibv_context *ctx, struct fi_info *info
 
 	info->domain_attr->cq_cnt 		= device_attr.max_cq;
 	info->domain_attr->ep_cnt 		= device_attr.max_qp;
-	info->domain_attr->tx_ctx_cnt 		= MIN(info->domain_attr->tx_ctx_cnt, device_attr.max_qp);
-	info->domain_attr->rx_ctx_cnt 		= MIN(info->domain_attr->rx_ctx_cnt, device_attr.max_qp);
-	info->domain_attr->max_ep_tx_ctx 	= MIN(info->domain_attr->tx_ctx_cnt, device_attr.max_qp);
-	info->domain_attr->max_ep_rx_ctx 	= MIN(info->domain_attr->rx_ctx_cnt, device_attr.max_qp);
-	info->domain_attr->max_ep_srx_ctx	= device_attr.max_qp;
+	info->domain_attr->tx_ctx_cnt 		= MIN(info->domain_attr->tx_ctx_cnt,
+						      device_attr.max_qp);
+	info->domain_attr->rx_ctx_cnt 		= MIN(info->domain_attr->rx_ctx_cnt,
+						      device_attr.max_qp);
+	info->domain_attr->max_ep_tx_ctx 	= MIN(info->domain_attr->tx_ctx_cnt,
+						      device_attr.max_qp);
+	info->domain_attr->max_ep_rx_ctx 	= MIN(info->domain_attr->rx_ctx_cnt,
+						      device_attr.max_qp);
+	info->domain_attr->max_ep_srx_ctx	= device_attr.max_srq;
 	info->domain_attr->mr_cnt		= device_attr.max_mr;
 
 	if (info->ep_attr->type == FI_EP_RDM)
@@ -408,9 +423,18 @@ static int fi_ibv_get_device_attrs(struct ibv_context *ctx, struct fi_info *info
 	info->rx_attr->size 			= device_attr.max_srq_wr ?
 						  MIN(device_attr.max_qp_wr,
 						      device_attr.max_srq_wr) :
-						      device_attr.max_qp_wr;
-	info->rx_attr->iov_limit 		= MIN(device_attr.max_sge,
-						      device_attr.max_srq_sge);
+						  device_attr.max_qp_wr;
+	info->rx_attr->iov_limit 		= device_attr.max_srq_sge ?
+						  MIN(device_attr.max_sge,
+						      device_attr.max_srq_sge) :
+						  device_attr.max_sge;
+
+	*srq_support = 1;
+	/* Check whether the device supports SRQ */
+	if (!device_attr.max_srq	||
+	    !device_attr.max_srq_wr	||
+	    !device_attr.max_srq_sge)
+		*srq_support = 0;
 
 	ret = fi_ibv_get_qp_cap(ctx, info);
 	if (ret)
@@ -459,7 +483,8 @@ static int fi_ibv_have_device(void)
 }
 
 static int fi_ibv_alloc_info(struct ibv_context *ctx, struct fi_info **info,
-			     const struct verbs_ep_domain *ep_dom)
+			     const struct verbs_ep_domain *ep_dom,
+			     int *srx_ctx_support)
 {
 	struct fi_info *fi;
 	union ibv_gid gid;
@@ -493,7 +518,7 @@ static int fi_ibv_alloc_info(struct ibv_context *ctx, struct fi_info **info,
 	fi->tx_attr->caps	= ep_dom->caps;
 	fi->rx_attr->caps	= ep_dom->caps;
 
-	ret = fi_ibv_get_device_attrs(ctx, fi);
+	ret = fi_ibv_get_device_attrs(ctx, fi, srx_ctx_support);
 	if (ret)
 		goto err;
 
@@ -523,7 +548,7 @@ static int fi_ibv_alloc_info(struct ibv_context *ctx, struct fi_info **info,
 			goto err;
 		}
 
-		name_len =  strlen(VERBS_IB_PREFIX) + INET6_ADDRSTRLEN;
+		name_len = strlen(VERBS_IB_PREFIX) + INET6_ADDRSTRLEN;
 
 		if (!(fi->fabric_attr->name = calloc(1, name_len + 1))) {
 			ret = -FI_ENOMEM;
@@ -866,11 +891,14 @@ rai_to_fi:
 	return 0;
 }
 
-int fi_ibv_init_info(struct fi_info **all_infos)
+int fi_ibv_init_info(struct fi_info **all_infos,
+		     uint64_t *srx_ctx_per_device)
 {
 	struct ibv_context **ctx_list;
 	struct fi_info *fi = NULL, *tail = NULL;
-	int ret = 0, i, num_devices, fork_unsafe = 0;
+	size_t info_counter = 0;
+	int ret = 0, i, num_devices;
+	int fork_unsafe = 0, srx_ctx_support = 0;
 
 	*all_infos = NULL;
 
@@ -903,19 +931,29 @@ int fi_ibv_init_info(struct fi_info **all_infos)
 	}
 
 	for (i = 0; i < num_devices; i++) {
-		ret = fi_ibv_alloc_info(ctx_list[i], &fi, &verbs_msg_domain);
+		ret = fi_ibv_alloc_info(ctx_list[i], &fi, &verbs_msg_domain,
+					&srx_ctx_support);
 		if (!ret) {
 			if (!*all_infos)
 				*all_infos = fi;
 			else
 				tail->next = fi;
 			tail = fi;
+			if (srx_ctx_support)
+				*srx_ctx_per_device |=
+					(1ULL << info_counter);
+			info_counter++;
 
 			ret = fi_ibv_alloc_info(ctx_list[i], &fi,
-						&verbs_rdm_domain);
+						&verbs_rdm_domain,
+						&srx_ctx_support);
 			if (!ret) {
 				tail->next = fi;
 				tail = fi;
+				if (srx_ctx_support)
+					*srx_ctx_per_device |=
+						(1ULL << info_counter);
+				info_counter++;
 			}
 		}
 	}
@@ -982,10 +1020,13 @@ static int fi_ibv_set_default_info(struct fi_info *info)
 }
 
 static int fi_ibv_get_matching_info(uint32_t version, const char *dev_name,
-		struct fi_info *hints, struct fi_info **info, struct fi_info *verbs_info)
+				    struct fi_info *hints, struct fi_info **info,
+				    struct fi_info *verbs_info,
+				    uint64_t srx_ctx_per_device)
 {
 	struct fi_info *check_info;
 	struct fi_info *fi, *tail;
+	size_t info_counter = 0;
 	int ret;
 
 	*info = tail = NULL;
@@ -993,11 +1034,16 @@ static int fi_ibv_get_matching_info(uint32_t version, const char *dev_name,
 	for (check_info = verbs_info; check_info; check_info = check_info->next) {
 		/* Use strncmp since verbs RDM domain name would have "-rdm" suffix */
 		if (dev_name && strncmp(dev_name, check_info->domain_attr->name,
-					strlen(dev_name)))
+					strlen(dev_name))) {
+			info_counter++;
 			continue;
+		}
 
 		if (hints) {
-			ret = fi_ibv_check_hints(version, hints, check_info);
+			ret = fi_ibv_check_hints(version, hints, check_info,
+						 srx_ctx_per_device &
+							(1ULL << info_counter));
+			info_counter++;
 			if (ret)
 				continue;
 		}
@@ -1037,8 +1083,9 @@ int fi_ibv_getinfo(uint32_t version, const char *node, const char *service,
 	struct fi_info *raw_info;
 	const char *dev_name = NULL;
 	int ret;
+	uint64_t srx_ctx_per_device = 0;
 
-	ret = fi_ibv_init_info(&raw_info);
+	ret = fi_ibv_init_info(&raw_info, &srx_ctx_per_device);
 	if (ret)
 		goto out;
 
@@ -1049,7 +1096,8 @@ int fi_ibv_getinfo(uint32_t version, const char *node, const char *service,
 	if (id->verbs)
 		dev_name = ibv_get_device_name(id->verbs->device);
 
-	ret = fi_ibv_get_matching_info(version, dev_name, hints, info, raw_info);
+	ret = fi_ibv_get_matching_info(version, dev_name, hints,
+				       info, raw_info, srx_ctx_per_device);
 	if (ret)
 		goto err;
 

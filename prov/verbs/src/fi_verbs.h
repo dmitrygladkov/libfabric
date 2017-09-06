@@ -130,6 +130,7 @@ struct verbs_dev_info {
 struct fi_ibv_fabric {
 	struct util_fabric	util_fabric;
 	struct fi_info		*info;
+	uint64_t		srx_ctx_per_device;
 };
 
 int fi_ibv_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
@@ -336,7 +337,8 @@ struct fi_ibv_connreq {
 int fi_ibv_sockaddr_len(struct sockaddr *addr);
 
 
-int fi_ibv_init_info(struct fi_info **all_infos);
+int fi_ibv_init_info(struct fi_info **all_infos,
+		     uint64_t *srx_ctx_per_device);
 int fi_ibv_getinfo(uint32_t version, const char *node, const char *service,
 		   uint64_t flags, struct fi_info *hints, struct fi_info **info);
 struct fi_info *
@@ -357,9 +359,11 @@ struct verbs_ep_domain {
 extern const struct verbs_ep_domain verbs_rdm_domain;
 
 int fi_ibv_check_ep_attr(const struct fi_ep_attr *attr,
-			 const struct fi_info *info);
+			 const struct fi_info *info,
+			 int srx_ctx_support);
 int fi_ibv_check_rx_attr(const struct fi_rx_attr *attr,
-			 const struct fi_info *hints, struct fi_info *info);
+			 const struct fi_info *hints,
+			 struct fi_info *info);
 
 ssize_t fi_ibv_send(struct fi_ibv_msg_ep *ep, struct ibv_send_wr *wr, size_t len,
 		    int count, void *context);

@@ -506,8 +506,9 @@ int fi_ibv_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 	struct fi_ibv_fabric *fab;
 	struct fi_info *info, *cur;
 	int ret;
+	uint64_t srx_ctx_per_device = 0;
 
-	ret = fi_ibv_init_info(&info);
+	ret = fi_ibv_init_info(&info, &srx_ctx_per_device);
 	if (ret)
 		return ret;
 
@@ -515,6 +516,7 @@ int fi_ibv_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 	if (!fab)
 		return -FI_ENOMEM;
 
+	fab->srx_ctx_per_device = srx_ctx_per_device;
 	for (cur = info; cur; cur = info->next) {
 		ret = ofi_fabric_init(&fi_ibv_prov, cur->fabric_attr, attr,
 				      &fab->util_fabric, context);

@@ -280,7 +280,8 @@ int fi_ibv_open_ep(struct fid_domain *domain, struct fi_info *info,
 	struct fi_ibv_connreq *connreq;
 	struct fi_ibv_pep *pep;
 	struct fi_info *fi;
-	int ret;
+	int ret, srq_support = 1;
+	struct ibv_device_attr device_attr;
 
 	dom = container_of(domain, struct fi_ibv_domain, domain_fid);
 	if (strcmp(dom->verbs->device->name, info->domain_attr->name)) {
@@ -290,8 +291,22 @@ int fi_ibv_open_ep(struct fid_domain *domain, struct fi_info *info,
 
 	fi = dom->info;
 
+	ret = ibv_query_device(dom->verbs, &device_attr);
+	if (ret) {
+		VERBS_INFO(FI_LOG_DOMAIN,
+			   "ibv_query_device failed with errno\n",
+			   errno);
+		return -errno;
+	}
+
+	if (!device_attr.max_srq        ||
+	    !device_attr.max_srq_wr     ||
+	    !device_attr.max_srq_sge)
+		srq_support = 0;
+
 	if (info->ep_attr) {
-		ret = fi_ibv_check_ep_attr(info->ep_attr, fi);
+	    ret = fi_ibv_check_ep_attr(info->ep_attr, fi,
+				       srq_support);
 		if (ret)
 			return ret;
 	}
