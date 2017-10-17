@@ -165,7 +165,11 @@ AC_TRY_LINK([#include <stdint.h>],
     [int32_t a;
      __sync_add_and_fetch(&a, 0);
      __sync_sub_and_fetch(&a, 0);
+     #if defined(__PPC__) && !defined(__PPC64__)
        return 0;
+     #else
+      #error compiler built-in atomics are not supported on PPC32
+     #endif
     ],
     [
 	AC_MSG_RESULT(yes)
