@@ -37,7 +37,7 @@ static int mlx_cm_getname(
 			size_t *addrlen)
 {
 	ucs_status_t status = UCS_OK;
-	void* addr_local = NULL;
+	void *addr_local = NULL;
 	size_t addr_len_local;
 	struct mlx_ep* ep;
 	int ofi_status = FI_SUCCESS;
@@ -58,12 +58,13 @@ static int mlx_cm_getname(
 			addrlen, addr_len_local, (char *)addr_local);
 		ofi_status = -FI_ETOOSMALL;
 	}
-	FI_INFO( &mlx_prov, FI_LOG_CORE, 
-		"Loaded UCP adress: [%d]%s\n",
+	FI_INFO(&mlx_prov, FI_LOG_CORE, 
+		"Loaded UCP address: [%d]%s\n",
 		addr_len_local, (char *)addr_local);
 
-	memcpy( addr, addr_local,
-		(((*addrlen)<addr_len_local) ? (*addrlen):addr_len_local));
+	if (addr_local != NULL)
+		memcpy(addr, addr_local, (((*addrlen) < addr_len_local) ?
+					  (*addrlen) : addr_len_local));
 
 	*addrlen = addr_len_local;
 	ucp_worker_release_address(

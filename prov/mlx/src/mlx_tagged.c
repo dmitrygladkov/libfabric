@@ -206,7 +206,7 @@ static ssize_t mlx_tagged_sendmsg(
 		req = (struct mlx_request *) status;
 		req->cq = cq;
 		req->ep = u_ep;
-		req->type = MLX_FI_REQ_REGULAR; 
+		req->type = MLX_FI_REQ_REGULAR;
 		req->completion.tagged.op_context = msg->context;
 		req->completion.tagged.flags = FI_SEND;
 		req->completion.tagged.len = msg->msg_iov[0].iov_len;
