@@ -36,6 +36,7 @@
 #include <fi_util.h>
 #include <assert.h>
 #include <rbtree.h>
+#include <inttypes.h>
 
 /* key is `addr + len` value */
 static int util_rtc_compare_keys(void *key1, void *key2)
@@ -218,6 +219,8 @@ static int util_rtc_full_reg_buffer(struct util_rtc *rtc, void **prov_mr,
 	int ret;
 	struct util_rtc_entry *item;
 
+	FI_WARN(&core_prov, FI_LOG_CORE, "REGISTR item with key = %"PRIu64"\n", (uint64_t)((uint64_t)(uintptr_t)buf + len));
+
 	util_rtc_make_avail_space(rtc);
 	ret = util_rtc_insert(rtc, key, buf, len, &item);
 	if (ret) {
@@ -241,6 +244,8 @@ static int util_rtc_light_reg_buffer(struct util_rtc *rtc, struct util_rtc_entry
 {
 	util_rtc_reinsert(rtc, item);
 	*prov_mr = item->mr;
+
+	FI_WARN(&core_prov, FI_LOG_CORE, "FOUND item with key = %"PRIu64"\n", (uint64_t)((uint64_t)(uintptr_t)buf + len));
 
 	return FI_SUCCESS;
 }
