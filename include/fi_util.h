@@ -810,4 +810,157 @@ int ofi_ns_del_local_name(struct util_ns *ns, void *service, void *name);
 void *ofi_ns_resolve_name(struct util_ns *ns, const char *server,
 			  void *service);
 
+/*
+ * MR cache
+ */
+struct util_fi_reg_context {
+	uint64_t access;
+	uint64_t offset;
+	uint64_t requested_key;
+	uint64_t flags;
+	void *context;
+	void *auth_key;
+	int reserved;
+};
+
+
+
+/**
+ * @brief gnix memory registration cache attributes
+ *
+ * @var   soft_reg_limit       unused currently, imposes a soft limit for which
+ *                             a flush can be called during register to
+ *                             drain any stale registrations
+ * @var   hard_reg_limit       limit to the number of memory registrations
+ *                             in the cache
+ * @var   hard_stale_limit     limit to the number of stale memory
+ *                             registrations in the cache. If the number is
+ *                             exceeded during deregistration,
+ *                             gnix_mr_cache_flush will be called to flush
+ *                             the stale entries.
+ * @var   lazy_deregistration  if non-zero, allows registrations to linger
+ *                             until the hard_stale_limit is exceeded. This
+ *                             prevents unnecessary re-registration of memory
+ *                             regions that may be reused frequently. Larger
+ *                             values for hard_stale_limit may reduce the
+ *                             frequency of flushes.
+ */
+struct util_mr_cache_attr {
+	int soft_reg_limit;
+	int hard_reg_limit;
+	int hard_stale_limit;
+	int lazy_deregistration;
+	void *reg_context;
+	void *dereg_context;
+	void *destruct_context;
+	void *(*reg_callback)(void *handle, void *address, size_t length,
+			struct util_fi_reg_context *fi_reg_context,
+			void *context);
+	int (*dereg_callback)(void *handle, void *context);
+	int (*destruct_callback)(void *context);
+	int elem_size;
+};
+
+enum util_mrc_state {
+	UTIL_MRC_STATE_UNINITIALIZED = 0,
+	UTIL_MRC_STATE_READY,
+	UTIL_MRC_STATE_DEAD,
+};
+
+/**
+ * @brief  memory registration cache entry storage
+ */
+struct util_mrce_storage {
+	ofi_atomic32_t elements;
+	RbtHandle rb_tree;
+};
+
+/**
+ * @brief  memory registration cache object
+ *
+ * @var    state           state of the cache
+ * @var    attr            cache attributes, @see struct util_mr_cache_attr
+ * @var    lru_head        head of LRU eviction list
+ * @var    inuse           cache entry storage struct
+ * @var    stale           cache entry storage struct
+ * @var    hits            cache hits
+ * @var    misses          cache misses
+ */
+struct util_mr_cache {
+	enum util_mrc_state state;
+	struct util_mr_cache_attr attr;
+	struct dlist_entry lru_head;
+	struct util_mrce_storage inuse;
+	struct util_mrce_storage stale;
+	uint64_t hits;
+	uint64_t misses;
+};
+
+
+/**
+ * @brief Destroys a memory registration cache. Flushes stale memory
+ *        registrations if the hard limit for stale registrations has been
+ *        exceeded
+ *
+ * @param[in] cache a memory registration cache
+ *
+ * @return           FI_SUCCESS on success
+ *                   -FI_EINVAL if an invalid cache pointer has been passed
+ *                     into the function
+ *                   -FI_EAGAIN if the cache still contains memory
+ *                     registrations that have not yet been deregistered
+ */
+int ofi_util_mr_cache_destroy(struct util_mr_cache *cache);
+
+/**
+ * @brief Flushes stale memory registrations from a memory registration cache.
+ *
+ * @param[in] cache a memory registration cache
+ *
+ * @return           FI_SUCCESS on success
+ *                   -FI_EINVAL if an invalid cache pointer has been passed
+ *                     into the function
+ */
+int ofi_util_mr_cache_flush(struct util_mr_cache *cache);
+
+/**
+ * @brief Initializes the MR cache state
+ *
+ * @param[in,out] cache  a memory registration cache
+ * @param[in] attr  cache attributes, @see struct util_mr_cache_attr
+ *
+ * @return           FI_SUCCESS on success
+ *                   -FI_ENOMEM otherwise
+ */
+int ofi_util_mr_cache_init(struct util_mr_cache **cache,
+			   struct util_mr_cache_attr *attr);
+
+
+/**
+ * Function to register memory with the cache
+ *
+ * @param[in] cache       a memory registration cache pointer
+ * @param[in] address     base address of the memory region to be registered
+ * @param[in] length      length of the memory region to be registered
+ * @param[in,out] handle  memory handle pointer to written to and returned
+ */
+int ofi_util_mr_cache_register(struct util_mr_cache *cache,
+			       uint64_t address, uint64_t length,
+			       struct util_fi_reg_context *fi_reg_context,
+			       void **handle);
+
+/**
+ * Function to deregister memory in the cache
+ *
+ * @param[in]  cache  a memory registration cache pointer
+ * @param[in]  mr     a memory registration descriptor pointer
+ *
+ * @return     FI_SUCCESS on success
+ *             -FI_ENOENT if there isn't an active memory registration
+ *               associated with the mr
+ *             return codes for potential calls to callbacks
+ */
+int ofi_util_mr_cache_deregister(struct util_mr_cache *cache,
+				 void *handle);
+
 #endif
