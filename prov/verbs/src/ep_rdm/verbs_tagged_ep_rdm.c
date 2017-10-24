@@ -694,8 +694,17 @@ static inline int fi_ibv_rdm_tagged_poll_send(struct fi_ibv_rdm_ep *ep)
 			ret = ibv_poll_cq(ep->scq, wc_count, wc);
 			for (i = 0; i < ret && !err; ++i) {
 				err = fi_ibv_rdm_process_send_wc(ep, &wc[i]);
+				if (err) {
+					if (wc[i].status != IBV_WC_RETRY_EXC_ERR) {
+						fi_ibv_rdm_process_err_send_wc(ep, &wc[i]);
+					} else {
+						fi_ibv_rdm_proccess_retry_counter_exc(ep, &wc[i],
+										      ret - i);
+						return FI_SUCCESS;
+					}
+				}
 			}
-		} while (!err && ret == wc_count);
+		} while (!err && (ret == wc_count));
 	}
 
 	if (err || ret < 0) {
@@ -720,9 +729,6 @@ wc_error:
 		VERBS_INFO(FI_LOG_EP_DATA, "ibv_poll_cq returned %d\n", ret);
 		assert(0);
 	}
-
-	for (i = 0; i < wc_count; i++)
-		fi_ibv_rdm_process_err_send_wc(ep, &wc[i]);
 
 	return -FI_EOTHER;
 }
