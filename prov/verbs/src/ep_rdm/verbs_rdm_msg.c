@@ -260,8 +260,7 @@ static ssize_t fi_ibv_rdm_inject(struct fid_ep *ep_fid, const void *buf,
 			if ((len > 0) && (buf))
 				memcpy(&sbuf->payload, buf, len);
 
-			FI_IBV_RDM_INC_SIG_POST_COUNTERS(conn, ep,
-							 wr.send_flags);
+			FI_IBV_RDM_INC_SIG_POST_COUNTERS(conn, ep);
 			if (ibv_post_send(conn->qp[0], &wr, &bad_wr)) {
 				util_buf_release(ep->fi_ibv_rdm_service_request_pool,
 						 sreq);
