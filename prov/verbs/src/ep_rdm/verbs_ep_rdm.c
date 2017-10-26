@@ -495,6 +495,7 @@ static int fi_ibv_rdm_ep_close(fid_t fid)
 	fi_ibv_rdm_clean_queues(ep);
 
 	util_buf_pool_destroy(ep->fi_ibv_rdm_request_pool);
+	util_buf_pool_destroy(ep->fi_ibv_rdm_service_request_pool);
 	util_buf_pool_destroy(ep->fi_ibv_rdm_multi_request_pool);
 	util_buf_pool_destroy(ep->fi_ibv_rdm_extra_buffers_pool);
 	util_buf_pool_destroy(ep->fi_ibv_rdm_postponed_pool);
@@ -647,6 +648,14 @@ int fi_ibv_rdm_open_ep(struct fid_domain *domain, struct fi_info *info,
 		goto err3;
 	}
 
+	_ep->fi_ibv_rdm_service_request_pool = util_buf_pool_create(
+		sizeof(struct fi_ibv_rdm_service_request),
+		FI_IBV_RDM_MEM_ALIGNMENT, 0, 100);
+	if (!_ep->fi_ibv_rdm_service_request_pool) {
+		ret = -FI_ENOMEM;
+		goto err3;
+	}
+
 	_ep->fi_ibv_rdm_multi_request_pool = util_buf_pool_create(
 		sizeof(struct fi_ibv_rdm_multi_request),
 		FI_IBV_RDM_MEM_ALIGNMENT, 0, 100);
@@ -711,6 +720,8 @@ err4:
 err3:
 	if (_ep->fi_ibv_rdm_request_pool)
 		util_buf_pool_destroy(_ep->fi_ibv_rdm_request_pool);
+	if (_ep->fi_ibv_rdm_service_request_pool)
+		util_buf_pool_destroy(_ep->fi_ibv_rdm_service_request_pool);
 	if (_ep->fi_ibv_rdm_multi_request_pool)
 		util_buf_pool_destroy(_ep->fi_ibv_rdm_multi_request_pool);
 	if (_ep->fi_ibv_rdm_postponed_pool)

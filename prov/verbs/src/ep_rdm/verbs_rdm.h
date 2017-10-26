@@ -150,6 +150,11 @@ struct fi_ibv_rdm_multi_request {
 	uint64_t			min_size;
 };
 
+struct fi_ibv_rdm_service_request {
+	struct fi_ibv_rdm_ep *ep;
+	struct fi_ibv_rdm_conn *conn;
+};
+
 struct fi_ibv_rdm_request {
 
 	/* Accessors and match info */
@@ -286,6 +291,7 @@ struct fi_ibv_rdm_ep {
 	struct fi_info	*info;
 
 	struct util_buf_pool	*fi_ibv_rdm_request_pool;
+	struct util_buf_pool	*fi_ibv_rdm_service_request_pool;
 	struct util_buf_pool	*fi_ibv_rdm_multi_request_pool;
 	struct util_buf_pool	*fi_ibv_rdm_postponed_pool;
 	/*
