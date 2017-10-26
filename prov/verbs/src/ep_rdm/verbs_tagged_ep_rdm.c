@@ -234,8 +234,15 @@ fi_ibv_rdm_tagged_inject(struct fid_ep *fid, const void *buf, size_t len,
 				.length = size + FI_IBV_RDM_BUFF_SERVICE_DATA_SIZE,
 				.lkey = conn->s_mr->lkey,
 			};
+			struct fi_ibv_rdm_service_request *sreq =
+				util_buf_alloc(ep->fi_ibv_rdm_service_request_pool);
+			if (OFI_UNLIKELY(!sreq))
+				goto fn;
 
-			wr.wr_id = FI_IBV_RDM_PACK_SERVICE_WR(conn);
+			sreq->conn = conn;
+			sreq->ep = ep;
+
+			wr.wr_id = FI_IBV_RDM_PACK_SERVICE_WR(sreq);
 			wr.sg_list = &sge;
 			wr.num_sge = 1;
 			wr.wr.rdma.remote_addr = (uintptr_t)
@@ -252,13 +259,14 @@ fi_ibv_rdm_tagged_inject(struct fid_ep *fid, const void *buf, size_t len,
 
 			FI_IBV_RDM_SET_PKTTYPE(sbuf->header.service_tag,
 					       FI_IBV_RDM_EAGER_PKT);
-			if ((len > 0) && (buf)) {
+			if ((len > 0) && (buf))
 				memcpy(&sbuf->payload, buf, len);
-			}
 
 			FI_IBV_RDM_INC_SIG_POST_COUNTERS(conn, ep,
 							 wr.send_flags);
 			if (ibv_post_send(conn->qp[0], &wr, &bad_wr)) {
+				util_buf_release(ep->fi_ibv_rdm_service_request_pool,
+						 sreq);
 				assert(0);
 				return -errno;
 			} else {
@@ -269,9 +277,8 @@ fi_ibv_rdm_tagged_inject(struct fid_ep *fid, const void *buf, size_t len,
 			}
 		}
 	}
-
+fn:
 	fi_ibv_rdm_tagged_poll(ep);
-
 	return -FI_EAGAIN;
 }
 
@@ -426,6 +433,14 @@ fi_ibv_rdm_tagged_release_remote_sbuff(struct fi_ibv_rdm_conn *conn,
 		.length = sizeof(conn->sbuf_ack_status),
 		.lkey = conn->ack_mr->lkey,
 	};
+	struct fi_ibv_rdm_service_request *sreq =
+		util_buf_alloc(ep->fi_ibv_rdm_service_request_pool);
+	if (OFI_UNLIKELY(!sreq)) {
+		VERBS_WARN(FI_LOG_EP_DATA, "Unable to allocate memory for"
+			   "service request\n");
+		assert(0);
+		return;
+	}
 
 	wr.wr_id = FI_IBV_RDM_PACK_SERVICE_WR(conn);
 	wr.sg_list = &sge;
@@ -442,6 +457,7 @@ fi_ibv_rdm_tagged_release_remote_sbuff(struct fi_ibv_rdm_conn *conn,
 		"posted %d bytes, remote sbuff released\n", sge.length);
 	int ret = ibv_post_send(conn->qp[0], &wr, &bad_wr);
 	if (ret) {
+		
 		VERBS_INFO_ERRNO(FI_LOG_EP_DATA, "ibv_post_send", errno);
 		assert(0);
 	};

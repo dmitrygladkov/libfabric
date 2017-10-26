@@ -723,11 +723,12 @@ fi_ibv_rdm_process_send_wc(struct fi_ibv_rdm_ep *ep,
 
 	if (FI_IBV_RDM_CHECK_SERVICE_WR_FLAG(wc->wr_id)) {
 		VERBS_DBG(FI_LOG_EP_DATA, "CQ COMPL: SEND -> 0x1\n");
-		struct fi_ibv_rdm_conn *conn =
-			(struct fi_ibv_rdm_conn *)
+		struct fi_ibv_rdm_service_request *sreq =
 			FI_IBV_RDM_UNPACK_SERVICE_WR(wc->wr_id);
-		FI_IBV_RDM_DEC_SIG_POST_COUNTERS(conn, ep);
+		FI_IBV_RDM_DEC_SIG_POST_COUNTERS(sreq->conn, ep);
 
+		util_buf_release(ep->fi_ibv_rdm_service_request_pool,
+				 sreq);
 		return 0;
 	} else {
 		FI_IBV_DBG_OPCODE(wc->opcode, "SEND");
@@ -749,7 +750,10 @@ fi_ibv_rdm_process_err_send_wc(struct fi_ibv_rdm_ep *ep,
 	if (wc->status != IBV_WC_SUCCESS) {
 		struct fi_ibv_rdm_conn *conn;
 		if (FI_IBV_RDM_CHECK_SERVICE_WR_FLAG(wc->wr_id)) {
-			conn = FI_IBV_RDM_UNPACK_SERVICE_WR(wc->wr_id);
+			struct fi_ibv_rdm_service_request *sreq =
+				FI_IBV_RDM_UNPACK_SERVICE_WR(wc->wr_id);
+			conn = sreq->conn;
+			util_buf_release(ep->fi_ibv_rdm_service_request_pool, sreq);
 		} else {
 			struct fi_ibv_rdm_request *req =
 				FI_IBV_RDM_UNPACK_WR(wc->wr_id);
