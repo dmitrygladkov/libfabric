@@ -823,8 +823,6 @@ struct util_fi_reg_context {
 	int reserved;
 };
 
-
-
 /**
  * @brief gnix memory registration cache attributes
  *
@@ -896,6 +894,12 @@ struct util_mr_cache {
 	uint64_t misses;
 };
 
+struct util_mr_cache_info {
+	void *provider_args;
+
+	fastlock_t mr_cache_lock;
+	int inuse;
+};
 
 /**
  * @brief Destroys a memory registration cache. Flushes stale memory
@@ -962,5 +966,20 @@ int ofi_util_mr_cache_register(struct util_mr_cache *cache,
  */
 int ofi_util_mr_cache_deregister(struct util_mr_cache *cache,
 				 void *handle);
+
+struct util_mr_cache_ops {
+	int (*init)(struct fid_domain *domain_fid,
+		    void *auth_key);
+	int (*is_init)(struct fid_domain *domain_fid,
+		       void *auth_key);
+	int (*reg_mr)(struct fid_domain *domain_fid, uint64_t address,
+		      uint64_t length, struct util_fi_reg_context *fi_reg_context,
+		      void **handle);
+	int (*dereg_mr)(struct fid_domain *domain_fid,
+			struct fid_mr *mr_fid);
+	int (*destroy_cache)(struct fid_domain *domain_fid,
+			     struct util_mr_cache_info *info);
+	int (*flush_cache)(struct fid_domain *domain_fid);
+};
 
 #endif
