@@ -83,14 +83,6 @@ struct util_mr_cache_entry {
 	uint64_t mr[0];
 };
 
-int util_mr_cache_register(struct util_mr_cache *cache,
-			   uint64_t address, uint64_t length,
-			   struct util_fi_reg_context *fi_reg_context,
-			   void **handle);
-
-int util_mr_cache_deregister(struct util_mr_cache *cache,
-			     void *handle);
-
 static inline int util_mr_cache_entry_put(struct util_mr_cache *cache,
 					  struct util_mr_cache_entry *entry);
 
@@ -1237,7 +1229,7 @@ err:
  * @param[in,out] mem_hndl    gni memory handle pointer to written to and
  *                            returned
  */
-int util_mr_cache_register(struct util_mr_cache *cache,
+int ofi_util_mr_cache_register(struct util_mr_cache *cache,
 			   uint64_t address, uint64_t length,
 			   struct util_fi_reg_context *fi_reg_context,
 			   void **handle)
@@ -1314,7 +1306,7 @@ err:
  *               associated with the mr
  *             return codes associated with dereg callback
  */
-int util_mr_cache_deregister(struct util_mr_cache *cache,
+int ofi_util_mr_cache_deregister(struct util_mr_cache *cache,
 			     void *handle)
 {
 	struct util_mr_cache_entry *entry;

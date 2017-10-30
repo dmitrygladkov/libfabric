@@ -897,6 +897,9 @@ struct util_mr_cache {
 struct util_mr_cache_info {
 	void *provider_args;
 
+	struct util_mr_cache *mr_cache_rw;
+	struct util_mr_cache *mr_cache_ro;
+
 	fastlock_t mr_cache_lock;
 	int inuse;
 };

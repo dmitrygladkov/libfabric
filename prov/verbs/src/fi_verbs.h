@@ -177,6 +177,8 @@ extern struct fi_ibv_gl_data {
 	} dgram;
 } fi_ibv_gl_data;
 
+extern struct fi_ops_mr fi_ibv_domain_mr_ops;
+
 struct verbs_addr {
 	struct dlist_entry entry;
 	struct rdma_addrinfo *rai;
@@ -334,6 +336,10 @@ struct fi_ibv_domain {
 	/* This EQ is utilized by verbs/RDM and verbs/DGRAM */
 	struct fi_ibv_eq	*eq;
 	uint64_t		eq_flags;
+
+	struct util_mr_cache_attr	mr_cache_attr;
+	struct util_mr_cache_info	*mr_cache_info;
+	struct util_mr_ops		*mr_ops;
 };
 
 struct fi_ibv_cq;
