@@ -386,6 +386,9 @@ fi_ibv_domain(struct fid_fabric *fabric, struct fi_info *info,
 		goto err4;
 	}
 
+	_domain->mr_cache_ops = &fi_ibv_mr_cache_ops;
+	(void) fi_ibv_open_mr_cache(&_domain->util_domain.domain_fid);
+
 	*domain = &_domain->util_domain.domain_fid;
 	return FI_SUCCESS;
 /* Only verbs/RDM should be able to go through err[5-7] */

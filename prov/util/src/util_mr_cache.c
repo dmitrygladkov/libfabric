@@ -401,15 +401,12 @@ util_mr_cache_entry_destroy(struct util_mr_cache *cache,
 	int rc;
 
 	rc = cache->attr.dereg_callback(entry->mr,
-					cache->attr.destruct_context);
+					cache->attr.dereg_context);
 	if (!rc) {
 		/*if (!util_entry_is_unmapped(entry)) { UNMONITOR!
 		}*/
 		util_entry_reset_state(entry);
-
-		rc = cache->attr.destruct_callback(cache->attr.dereg_context);
-		if (!rc)
-			free(entry);
+		free(entry);
 	} else {
 		FI_INFO(&core_prov, FI_LOG_MR, "failed to deregister memory"
 			  " region with callback, "
@@ -694,8 +691,7 @@ util_check_mr_cache_attr_sanity(struct util_mr_cache_attr *attr)
 		return -FI_EINVAL;
 
 	/* callbacks must be provided */
-	if (!attr->reg_callback || !attr->dereg_callback ||
-			!attr->destruct_callback)
+	if (!attr->reg_callback || !attr->dereg_callback)
 		return -FI_EINVAL;
 
 	/* valid otherwise */
@@ -1156,13 +1152,13 @@ static int util_mr_cache_create_registration(struct util_mr_cache *cache,
 	if (!current_entry)
 		return -FI_ENOMEM;
 
-	handle = (void *) current_entry->mr;
+	handle = (void *)current_entry->mr;
 
 	dlist_init(&current_entry->lru_entry);
 	dlist_init(&current_entry->children);
 	dlist_init(&current_entry->siblings);
 
-	handle = cache->attr.reg_callback(handle, (void *) address, length,
+	handle = cache->attr.reg_callback(handle, (void *)address, length,
 			fi_reg_context, cache->attr.reg_context);
 	if (OFI_UNLIKELY(!handle)) {
 		FI_INFO(&core_prov, FI_LOG_MR,

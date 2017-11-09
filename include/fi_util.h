@@ -814,13 +814,13 @@ void *ofi_ns_resolve_name(struct util_ns *ns, const char *server,
  * MR cache
  */
 struct util_fi_reg_context {
-	uint64_t access;
-	uint64_t offset;
-	uint64_t requested_key;
-	uint64_t flags;
-	void *context;
-	void *auth_key;
-	int reserved;
+	uint64_t	access;
+	uint64_t	offset;
+	uint64_t	requested_key;
+	uint64_t	flags;
+	void		*context;
+	void		*auth_key;
+	int		reserved;
 };
 
 /**
@@ -844,18 +844,17 @@ struct util_fi_reg_context {
  *                             frequency of flushes.
  */
 struct util_mr_cache_attr {
-	int soft_reg_limit;
-	int hard_reg_limit;
-	int hard_stale_limit;
-	int lazy_deregistration;
-	void *reg_context;
-	void *dereg_context;
-	void *destruct_context;
+	int	soft_reg_limit;
+	int	hard_reg_limit;
+	int	hard_stale_limit;
+	int	lazy_deregistration;
+
+	void	*reg_context;
+	void	*dereg_context;
 	void *(*reg_callback)(void *handle, void *address, size_t length,
-			struct util_fi_reg_context *fi_reg_context,
-			void *context);
+			      struct util_fi_reg_context *fi_reg_context,
+			      void *context);
 	int (*dereg_callback)(void *handle, void *context);
-	int (*destruct_callback)(void *context);
 	int elem_size;
 };
 
@@ -892,16 +891,6 @@ struct util_mr_cache {
 	struct util_mrce_storage stale;
 	uint64_t hits;
 	uint64_t misses;
-};
-
-struct util_mr_cache_info {
-	void *provider_args;
-
-	struct util_mr_cache *mr_cache_rw;
-	struct util_mr_cache *mr_cache_ro;
-
-	fastlock_t mr_cache_lock;
-	int inuse;
 };
 
 /**
@@ -969,20 +958,5 @@ int ofi_util_mr_cache_register(struct util_mr_cache *cache,
  */
 int ofi_util_mr_cache_deregister(struct util_mr_cache *cache,
 				 void *handle);
-
-struct util_mr_cache_ops {
-	int (*init)(struct fid_domain *domain_fid,
-		    void *auth_key);
-	int (*is_init)(struct fid_domain *domain_fid,
-		       void *auth_key);
-	int (*reg_mr)(struct fid_domain *domain_fid, uint64_t address,
-		      uint64_t length, struct util_fi_reg_context *fi_reg_context,
-		      void **handle);
-	int (*dereg_mr)(struct fid_domain *domain_fid,
-			struct fid_mr *mr_fid);
-	int (*destroy_cache)(struct fid_domain *domain_fid,
-			     struct util_mr_cache_info *info);
-	int (*flush_cache)(struct fid_domain *domain_fid);
-};
 
 #endif

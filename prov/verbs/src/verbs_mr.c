@@ -35,13 +35,14 @@
 
 static int fi_ibv_mr_close(fid_t fid)
 {
-	struct fi_ibv_mem_desc *mr;
+	struct fi_ibv_mem_desc *mr =
+		container_of(fid, struct fi_ibv_mem_desc, mr_fid.fid);
 	int ret;
 
-	mr = container_of(fid, struct fi_ibv_mem_desc, mr_fid.fid);
-	ret = -ibv_dereg_mr(mr->mr);
-	if (!ret)
-		free(mr);
+	ret = mr->domain->mr_cache_ops->dereg_mr((void *)mr, (void *)mr->domain);
+	if (ret)
+		return ret;
+
 	return ret;
 }
 
@@ -53,28 +54,17 @@ static struct fi_ops fi_ibv_mr_ops = {
 	.ops_open = fi_no_ops_open,
 };
 
-static int
-fi_ibv_mr_reg(struct fid *fid, const void *buf, size_t len,
-	      uint64_t access, uint64_t offset, uint64_t requested_key,
-	      uint64_t flags, struct fid_mr **mr, void *context)
+static void *fi_ibv_register_region(void *handle, void *address, size_t length,
+				    struct util_fi_reg_context *fi_reg_context,
+				    void *context)
 {
-	struct fi_ibv_mem_desc *md;
 	int fi_ibv_access = 0;
-	struct fid_domain *domain;
-
-	if (flags)
-		return -FI_EBADFLAGS;
-
-	if (fid->fclass != FI_CLASS_DOMAIN)
-		return -FI_EINVAL;
-	domain = container_of(fid, struct fid_domain, fid);
-
-	md = calloc(1, sizeof(*md));
+	uint64_t access = fi_reg_context->access;
+	struct fi_ibv_mem_desc *md = calloc(1, sizeof(*md));
 	if (!md)
-		return -FI_ENOMEM;
+		return NULL;
 
-	md->domain = container_of(domain, struct fi_ibv_domain,
-				  util_domain.domain_fid);
+	md->domain = (struct fi_ibv_domain *)context;
 	md->mr_fid.fid.fclass = FI_CLASS_MR;
 	md->mr_fid.fid.context = context;
 	md->mr_fid.fid.ops = &fi_ibv_mr_ops;
@@ -87,7 +77,6 @@ fi_ibv_mr_reg(struct fid *fid, const void *buf, size_t len,
 		fi_ibv_access |= IBV_ACCESS_LOCAL_WRITE;
 
 	/* Local read access to an MR is enabled by default in verbs */
-
 	if (access & FI_RECV)
 		fi_ibv_access |= IBV_ACCESS_LOCAL_WRITE;
 
@@ -111,12 +100,59 @@ fi_ibv_mr_reg(struct fid *fid, const void *buf, size_t len,
 				 IBV_ACCESS_REMOTE_WRITE |
 				 IBV_ACCESS_REMOTE_ATOMIC;
 
-	md->mr = ibv_reg_mr(md->domain->pd, (void *) buf, len, fi_ibv_access);
+	md->mr = ibv_reg_mr(md->domain->pd, (void *)address,
+			    length, fi_ibv_access);
 	if (!md->mr)
 		goto err;
 
-	md->mr_fid.mem_desc = (void *) (uintptr_t) md->mr->lkey;
+	md->mr_fid.mem_desc = (void *)(uintptr_t)md->mr->lkey;
 	md->mr_fid.key = md->mr->rkey;
+
+	return md;
+err:
+	free(md);
+	return NULL;
+}
+
+static int fi_ibv_deregister_region(void *handle, void *context)
+{
+	struct fi_ibv_mem_desc *mr = (struct fi_ibv_mem_desc *)handle;
+	int ret = -ibv_dereg_mr(mr->mr);
+	if (!ret)
+		free(mr);
+	return ret;
+}
+
+static int
+fi_ibv_mr_reg(struct fid *fid, const void *buf, size_t len,
+	      uint64_t access, uint64_t offset, uint64_t requested_key,
+	      uint64_t flags, struct fid_mr **mr, void *context)
+{
+	struct fi_ibv_mem_desc *md;
+	int ret;
+	struct util_fi_reg_context fi_reg_context = {
+		.access		= access,
+		.offset		= offset,
+		.requested_key	= requested_key,
+		.flags		= flags,
+		.context	= context,
+	};
+	struct fid_domain *domain_fid = container_of(fid, struct fid_domain,
+						     fid);
+	struct fi_ibv_domain *domain = container_of(domain_fid, struct fi_ibv_domain,
+						    util_domain.domain_fid);
+
+	/* Flags are reserved for future use and must be 0. */
+	if (OFI_UNLIKELY(flags))
+		return -FI_EBADFLAGS;
+
+	ret = domain->mr_cache_ops->reg_mr(domain_fid,
+					   (uint64_t)(uintptr_t)buf, len,
+					   &fi_reg_context,
+					   (void **)&md);
+	if (ret)
+		return ret;
+
 	*mr = &md->mr_fid;
 	if (md->domain->eq_flags & FI_REG_MR) {
 		struct fi_eq_entry entry = {
@@ -131,10 +167,7 @@ fi_ibv_mr_reg(struct fid *fid, const void *buf, size_t len,
 			fi_eq_write(&md->domain->util_domain.eq->eq_fid,
 				    FI_MR_COMPLETE, &entry, sizeof(entry), 0);
 	}
-	return 0;
-err:
-	free(md);
-	return -errno;
+	return FI_SUCCESS;
 }
 
 static int fi_ibv_mr_regv(struct fid *fid, const struct iovec * iov,
@@ -168,16 +201,28 @@ struct fi_ops_mr fi_ibv_domain_mr_ops = {
 	.regattr = fi_ibv_mr_regattr,
 };
 
-static int fi_ibv_mr_cache_is_init(struct fid_domain *domain_fid,
-				   void *auth_key)
+static int fi_ibv_mr_cache_init(struct fid_domain *domain_fid)
 {
-	struct fi_ibv_domain domain =
+	struct fi_ibv_domain *domain =
+		container_of(domain, struct fi_ibv_domain,
+			     util_domain.domain_fid);
+	int ret;
+
+	ret = ofi_util_mr_cache_init(&domain->mr_cache,
+				     &domain->mr_cache_attr);
+	if (!ret)
+		domain->mr_cache_inuse = 1;
+
+	return ret;
+}
+
+static int fi_ibv_mr_cache_is_init(struct fid_domain *domain_fid)
+{
+	struct fi_ibv_domain *domain =
 		container_of(domain, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 
-	OFI_UNUSED(auth_key);
-
-	return domain->mr_cache_info->inuse;
+	return domain->mr_cache_inuse;
 }
 
 static int fi_ibv_mr_cache_reg_mr(struct fid_domain *domain_fid,
@@ -185,54 +230,80 @@ static int fi_ibv_mr_cache_reg_mr(struct fid_domain *domain_fid,
 				  struct util_fi_reg_context *fi_reg_context,
 				  void **handle)
 {
-	struct util_mr_cache *cache;
-	struct fi_ibv_domain domain =
+	struct fi_ibv_domain *domain =
 		container_of(domain, struct fi_ibv_domain,
 			     util_domain.domain_fid);
-	struct util_mr_cache_info *info = domain->mr_cache_info;
 
-	if (fi_reg_context->access & (FI_RECV | FI_READ | FI_REMOTE_WRITE))
-		cache = info->mr_cache_rw;
-	else
-		cache = info->mr_cache_ro;
-
-	return ofi_util_mr_cache_register(cache, address, length,
+	return ofi_util_mr_cache_register(domain->mr_cache, address, length,
 					  fi_reg_context, handle);
 }
 
 static int fi_ibv_mr_cache_dereg_mr(struct fid_domain *domain_fid,
 				    struct fid_mr *mr)
 {
-	struct util_mr_cache *cache;
-	struct gnix_mr_cache_info *info = GNIX_GET_MR_CACHE_INFO(domain,
-			md->auth_key);
+	struct fi_ibv_domain *domain =
+		container_of(domain, struct fi_ibv_domain,
+			     util_domain.domain_fid);
 
-	if (GNI_MEMHNDL_GET_FLAGS((md->mem_hndl)) &
-	    GNI_MEMHNDL_FLAG_READONLY)
-		cache = info->mr_cache_ro;
-	else
-		cache = info->mr_cache_rw;
-
-	return _gnix_mr_cache_deregister(cache, md);
+	return ofi_util_mr_cache_deregister(domain->mr_cache, mr);
 }
 
-static struct util_mr_cache_ops cache_mr_ops = {
+static int fi_ibv_mr_cache_close(struct fid_domain *domain_fid)
+{
+	struct fi_ibv_domain *domain =
+		container_of(domain, struct fi_ibv_domain,
+			     util_domain.domain_fid);
+	int ret;
+
+	if (!domain->mr_cache_inuse)
+		return FI_SUCCESS;
+
+	ret = ofi_util_mr_cache_destroy(domain->mr_cache);
+	if (ret)
+		VERBS_WARN(FI_LOG_DOMAIN,
+			   "Unable to destroy MR Cache ret = %d", ret);
+
+	domain->mr_cache = NULL;
+	domain->mr_cache_inuse = 0;
+
+	return FI_SUCCESS;
+}
+
+static int fi_ibv_mr_cache_flush(struct fid_domain *domain_fid)
+{
+	struct fi_ibv_domain *domain =
+		container_of(domain, struct fi_ibv_domain,
+			     util_domain.domain_fid);
+	return ofi_util_mr_cache_flush(domain->mr_cache);
+}
+
+struct fi_ibv_mr_cache_ops fi_ibv_mr_cache_ops = {
+	.init = fi_ibv_mr_cache_init,
 	.is_init = fi_ibv_mr_cache_is_init,
 	.reg_mr = fi_ibv_mr_cache_reg_mr,
-	.dereg_mr = ,
+	.dereg_mr = fi_ibv_mr_cache_dereg_mr,
+	.destroy_cache = fi_ibv_mr_cache_close,
+	.flush_cache = fi_ibv_mr_cache_flush,
 };
 
 int fi_ibv_open_mr_cache(struct fid_domain *domain_fid)
 {
-	struct fi_ibv_domain domain =
+	struct fi_ibv_domain *domain =
 		container_of(domain, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 
-	if (domain->mr_ops && domain->mr_ops->is_init(domain, domain->auth_key))
+	if (domain->mr_cache_ops && domain->mr_cache_ops->is_init(domain_fid))
 		return -FI_EBUSY;
 
-	domain->cache_mr_ops = &cache_mr_ops;
-
-	domain->mr_cache_type = type;
 	return FI_SUCCESS;
 }
+
+struct util_mr_cache_attr fi_ibv_mr_cache_attr_def = {
+	.soft_reg_limit		= 4096,
+	.hard_reg_limit		= -1,
+	.hard_stale_limit	= 128,
+	.lazy_deregistration	= 0,
+	.reg_callback		= fi_ibv_register_region,
+	.dereg_callback		= fi_ibv_deregister_region,
+	.elem_size		= sizeof(struct fid_mr),
+};
