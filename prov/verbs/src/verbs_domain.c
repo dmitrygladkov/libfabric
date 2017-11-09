@@ -387,6 +387,9 @@ fi_ibv_domain(struct fid_fabric *fabric, struct fi_info *info,
 	}
 
 	_domain->mr_cache_ops = &fi_ibv_mr_cache_ops;
+	_domain->mr_cache_attr = fi_ibv_mr_cache_attr_def;
+	_domain->mr_cache_attr.reg_context = (void *)_domain;
+	_domain->mr_cache_attr.dereg_context = (void *)_domain;
 	(void) fi_ibv_open_mr_cache(&_domain->util_domain.domain_fid);
 
 	*domain = &_domain->util_domain.domain_fid;

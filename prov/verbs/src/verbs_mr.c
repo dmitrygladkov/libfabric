@@ -35,11 +35,11 @@
 
 static int fi_ibv_mr_close(fid_t fid)
 {
-	struct fi_ibv_mem_desc *mr =
+	struct fi_ibv_mem_desc *md =
 		container_of(fid, struct fi_ibv_mem_desc, mr_fid.fid);
 	int ret;
 
-	ret = mr->domain->mr_cache_ops->dereg_mr((void *)mr, (void *)mr->domain);
+	ret = md->domain->mr_cache_ops->dereg_mr(md->domain, md);
 	if (ret)
 		return ret;
 
@@ -60,9 +60,7 @@ static void *fi_ibv_register_region(void *handle, void *address, size_t length,
 {
 	int fi_ibv_access = 0;
 	uint64_t access = fi_reg_context->access;
-	struct fi_ibv_mem_desc *md = calloc(1, sizeof(*md));
-	if (!md)
-		return NULL;
+	struct fi_ibv_mem_desc *md = handle;
 
 	md->domain = (struct fi_ibv_domain *)context;
 	md->mr_fid.fid.fclass = FI_CLASS_MR;
@@ -100,6 +98,11 @@ static void *fi_ibv_register_region(void *handle, void *address, size_t length,
 				 IBV_ACCESS_REMOTE_WRITE |
 				 IBV_ACCESS_REMOTE_ATOMIC;
 
+	fi_ibv_access |= IBV_ACCESS_LOCAL_WRITE |
+				 IBV_ACCESS_REMOTE_WRITE |
+				 IBV_ACCESS_REMOTE_ATOMIC |
+				 IBV_ACCESS_REMOTE_READ;
+
 	md->mr = ibv_reg_mr(md->domain->pd, (void *)address,
 			    length, fi_ibv_access);
 	if (!md->mr)
@@ -116,11 +119,9 @@ err:
 
 static int fi_ibv_deregister_region(void *handle, void *context)
 {
-	struct fi_ibv_mem_desc *mr = (struct fi_ibv_mem_desc *)handle;
-	int ret = -ibv_dereg_mr(mr->mr);
-	if (!ret)
-		free(mr);
-	return ret;
+	/* do NOT free fi_ibv_mem_desc here.
+	 * The fi_ibv_mem_desc is freed when MR cache entry is freed */
+	return -ibv_dereg_mr(((struct fi_ibv_mem_desc *)handle)->mr);
 }
 
 static int
@@ -204,7 +205,7 @@ struct fi_ops_mr fi_ibv_domain_mr_ops = {
 static int fi_ibv_mr_cache_init(struct fid_domain *domain_fid)
 {
 	struct fi_ibv_domain *domain =
-		container_of(domain, struct fi_ibv_domain,
+		container_of(domain_fid, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 	int ret;
 
@@ -219,7 +220,7 @@ static int fi_ibv_mr_cache_init(struct fid_domain *domain_fid)
 static int fi_ibv_mr_cache_is_init(struct fid_domain *domain_fid)
 {
 	struct fi_ibv_domain *domain =
-		container_of(domain, struct fi_ibv_domain,
+		container_of(domain_fid, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 
 	return domain->mr_cache_inuse;
@@ -231,27 +232,23 @@ static int fi_ibv_mr_cache_reg_mr(struct fid_domain *domain_fid,
 				  void **handle)
 {
 	struct fi_ibv_domain *domain =
-		container_of(domain, struct fi_ibv_domain,
+		container_of(domain_fid, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 
 	return ofi_util_mr_cache_register(domain->mr_cache, address, length,
 					  fi_reg_context, handle);
 }
 
-static int fi_ibv_mr_cache_dereg_mr(struct fid_domain *domain_fid,
-				    struct fid_mr *mr)
+static int fi_ibv_mr_cache_dereg_mr(struct fi_ibv_domain *domain,
+				    struct fi_ibv_mem_desc *md)
 {
-	struct fi_ibv_domain *domain =
-		container_of(domain, struct fi_ibv_domain,
-			     util_domain.domain_fid);
-
-	return ofi_util_mr_cache_deregister(domain->mr_cache, mr);
+	return ofi_util_mr_cache_deregister(domain->mr_cache, md);
 }
 
 static int fi_ibv_mr_cache_close(struct fid_domain *domain_fid)
 {
 	struct fi_ibv_domain *domain =
-		container_of(domain, struct fi_ibv_domain,
+		container_of(domain_fid, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 	int ret;
 
@@ -272,7 +269,7 @@ static int fi_ibv_mr_cache_close(struct fid_domain *domain_fid)
 static int fi_ibv_mr_cache_flush(struct fid_domain *domain_fid)
 {
 	struct fi_ibv_domain *domain =
-		container_of(domain, struct fi_ibv_domain,
+		container_of(domain_fid, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 	return ofi_util_mr_cache_flush(domain->mr_cache);
 }
@@ -289,21 +286,21 @@ struct fi_ibv_mr_cache_ops fi_ibv_mr_cache_ops = {
 int fi_ibv_open_mr_cache(struct fid_domain *domain_fid)
 {
 	struct fi_ibv_domain *domain =
-		container_of(domain, struct fi_ibv_domain,
+		container_of(domain_fid, struct fi_ibv_domain,
 			     util_domain.domain_fid);
 
 	if (domain->mr_cache_ops && domain->mr_cache_ops->is_init(domain_fid))
 		return -FI_EBUSY;
 
-	return FI_SUCCESS;
+	return domain->mr_cache_ops->init(domain_fid);
 }
 
 struct util_mr_cache_attr fi_ibv_mr_cache_attr_def = {
 	.soft_reg_limit		= 4096,
 	.hard_reg_limit		= -1,
 	.hard_stale_limit	= 128,
-	.lazy_deregistration	= 0,
+	.lazy_deregistration	= 1,
 	.reg_callback		= fi_ibv_register_region,
 	.dereg_callback		= fi_ibv_deregister_region,
-	.elem_size		= sizeof(struct fid_mr),
+	.elem_size		= sizeof(struct fi_ibv_mem_desc),
 };

@@ -638,11 +638,10 @@ int util_mr_cache_entry_put(struct util_mr_cache *cache,
 		/* if we are doing lazy dereg and the entry
 		 * isn't retired, put it in the stale cache
 		 */
-		if (cache->attr.lazy_deregistration &&
-		    !(util_entry_is_retired(entry))) {
+		if (cache->attr.lazy_deregistration && !(util_entry_is_retired(entry))) {
 			FI_DBG(&core_prov, FI_LOG_MR,
-			       "moving key %"PRIu64":%"PRIu64" to stale\n",
-			       entry->key.address, entry->key.length);
+			       "moving key %"PRIu64":%"PRIu64" to stale (entry %p)\n",
+			       entry->key.address, entry->key.length, entry);
 
 			found = rbtFindLeftmost(cache->stale.rb_tree,
 						&entry->key,
@@ -660,8 +659,8 @@ int util_mr_cache_entry_put(struct util_mr_cache *cache,
 		} else {
 			/* if retired or not using lazy registration */
 			FI_DBG(&core_prov, FI_LOG_MR,
-			       "destroying entry, key=%"PRIu64":%"PRIu64"\n",
-			       entry->key.address, entry->key.length);
+			       "destroying entry, key=%"PRIu64":%"PRIu64" (entry %p)\n",
+			       entry->key.address, entry->key.length, entry);
 
 			grc = util_mr_cache_entry_destroy(cache, entry);
 		}
@@ -1189,8 +1188,9 @@ static int util_mr_cache_create_registration(struct util_mr_cache *cache,
 	}
 
 	FI_DBG(&core_prov, FI_LOG_MR,
-	       "inserted key %"PRIu64":%"PRIu64" into inuse\n",
-	       current_entry->key.address, current_entry->key.length);
+	       "inserted key %"PRIu64":%"PRIu64" into inuse (entry is %p)\n",
+	       current_entry->key.address, current_entry->key.length,
+	       current_entry);
 
 	ofi_atomic_inc32(&cache->inuse.elements);
 	ofi_atomic_initialize32(&current_entry->ref_cnt, 1);

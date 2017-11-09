@@ -320,14 +320,20 @@ struct fi_ibv_pep {
 struct fi_ops_cm *fi_ibv_pep_ops_cm(struct fi_ibv_pep *pep);
 struct fi_ibv_rdm_cm;
 
+struct fi_ibv_mem_desc {
+	struct fid_mr		mr_fid;
+	struct ibv_mr		*mr;
+	struct fi_ibv_domain	*domain;
+};
+
 struct fi_ibv_mr_cache_ops {
 	int (*init)(struct fid_domain *domain_fid);
 	int (*is_init)(struct fid_domain *domain_fid);
 	int (*reg_mr)(struct fid_domain *domain_fid, uint64_t address,
 		      uint64_t length, struct util_fi_reg_context *fi_reg_context,
 		      void **handle);
-	int (*dereg_mr)(struct fid_domain *domain_fid,
-			struct fid_mr *mr_fid);
+	int (*dereg_mr)(struct fi_ibv_domain *domain_fid,
+			struct fi_ibv_mem_desc *mr_fid);
 	int (*destroy_cache)(struct fid_domain *domain_fid);
 	int (*flush_cache)(struct fid_domain *domain_fid);
 };
@@ -424,12 +430,6 @@ struct fi_ibv_rdm_cq {
 
 int fi_ibv_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		   struct fid_cq **cq, void *context);
-
-struct fi_ibv_mem_desc {
-	struct fid_mr		mr_fid;
-	struct ibv_mr		*mr;
-	struct fi_ibv_domain	*domain;
-};
 
 struct fi_ibv_srq_ep {
 	struct fid_ep		ep_fid;
