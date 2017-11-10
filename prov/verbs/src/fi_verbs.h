@@ -162,6 +162,14 @@ extern struct fi_ibv_gl_data {
 	int	use_odp;
 	int	cqread_bunch_size;
 	char	*iface;
+	struct {
+		enum {
+			FI_IBV_MR_CACHE_OFF	= 0,
+			FI_IBV_MR_CACHE_ON	= 1,
+			FI_IBV_MR_CACHE_LAZY	= 2,
+		}		policy;
+		char		*policy_str;
+	} mr_cache_policy;
 
 	struct {
 		int	buffer_num;
@@ -177,7 +185,8 @@ extern struct fi_ibv_gl_data {
 	} dgram;
 } fi_ibv_gl_data;
 
-extern struct fi_ops_mr fi_ibv_domain_mr_ops;
+extern struct fi_ops_mr fi_ibv_domain_mr_w_cache_ops;
+extern struct fi_ops_mr fi_ibv_domain_mr_wo_cache_ops;
 
 struct verbs_addr {
 	struct dlist_entry entry;

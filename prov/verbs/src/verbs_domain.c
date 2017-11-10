@@ -300,7 +300,18 @@ fi_ibv_domain(struct fid_fabric *fabric, struct fi_info *info,
 	_domain->util_domain.domain_fid.fid.fclass = FI_CLASS_DOMAIN;
 	_domain->util_domain.domain_fid.fid.context = context;
 	_domain->util_domain.domain_fid.fid.ops = &fi_ibv_fid_ops;
-	_domain->util_domain.domain_fid.mr = &fi_ibv_domain_mr_ops;
+
+	switch (fi_ibv_gl_data.mr_cache_policy.policy) {
+	case FI_IBV_MR_CACHE_OFF:
+		_domain->util_domain.domain_fid.mr = &fi_ibv_domain_mr_wo_cache_ops;
+		break;
+	case FI_IBV_MR_CACHE_ON:
+		fi_ibv_mr_cache_attr_def.lazy_deregistration = 0;
+		/* FALL THROUGH */
+	case FI_IBV_MR_CACHE_LAZY:
+		_domain->util_domain.domain_fid.mr = &fi_ibv_domain_mr_w_cache_ops;
+		break;
+	};
 
 	switch (_domain->ep_type) {
 	case FI_EP_RDM:
