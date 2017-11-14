@@ -57,9 +57,10 @@ common_srcs = \
 	prov/util/src/util_poll.c   \
 	prov/util/src/util_wait.c   \
 	prov/util/src/util_buf.c    \
-	prov/util/src/util_mr.c     \
-	prov/util/src/util_ns.c     \
-	prov/util/src/util_shm.c
+	prov/util/src/util_mr.c     	\
+	prov/util/src/util_ns.c     	\
+	prov/util/src/util_shm.c		\
+	prov/util/src/memory/util_memory.c
 
 if MACOS
 common_srcs += src/unix/osd.c
