@@ -383,6 +383,7 @@ static int fi_ibv_rdm_ep_close(fid_t fid)
 			switch (conn->state) {
 			case FI_VERBS_CONN_ALLOCATED:
 			case FI_VERBS_CONN_ESTABLISHED:
+			case FI_VERBS_CONN_REJECTED:
 				ret = fi_ibv_rdm_start_disconnection(conn);
 				pthread_mutex_unlock(&av_entry->conn_lock);
 				break;
@@ -399,6 +400,14 @@ static int fi_ibv_rdm_ep_close(fid_t fid)
 							   "cm progress failed\n");
 						break;
 					}
+				}
+				/* Force a disconnection request, if CM ID is allocated */
+				if (conn->state == FI_VERBS_CONN_ALLOCATED ||
+				    conn->state == FI_VERBS_CONN_ESTABLISHED ||
+				    conn->state == FI_VERBS_CONN_REJECTED) {
+					pthread_mutex_lock(&av_entry->conn_lock);
+					ret = fi_ibv_rdm_start_disconnection(conn);
+					pthread_mutex_unlock(&av_entry->conn_lock);
 				}
 				break;
 			default:

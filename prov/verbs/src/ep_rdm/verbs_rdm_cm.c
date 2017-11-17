@@ -468,7 +468,8 @@ fi_ibv_rdm_process_connect_request(const struct rdma_cm_event *event,
 		}
 	} else {
 		assert(conn->state == FI_VERBS_CONN_ALLOCATED ||
-		       conn->state == FI_VERBS_CONN_STARTED);
+		       conn->state == FI_VERBS_CONN_STARTED ||
+		       conn->state == FI_VERBS_CONN_REJECTED);
 
 		const size_t idx = (conn->cm_role == FI_VERBS_CM_SELF) ? 1 : 0;
 
@@ -546,19 +547,17 @@ fi_ibv_rdm_process_event_established(const struct rdma_cm_event *event,
 	struct fi_ibv_rdm_conn *conn =
 		(struct fi_ibv_rdm_conn *)event->id->context;
 
-	if (conn->state != FI_VERBS_CONN_STARTED &&
-	    conn->cm_role != FI_VERBS_CM_SELF)
-	{
+	if (((conn->state != FI_VERBS_CONN_STARTED) &&
+	     (conn->state != FI_VERBS_CONN_REJECTED)) &&
+	    (conn->cm_role != FI_VERBS_CM_SELF)) {
 		VERBS_INFO(FI_LOG_AV, "state = %d, conn %p", conn->state, conn);
 		assert(0 && "Wrong state");
 		return -FI_ECONNABORTED;
 	}
 
-	if (conn->cm_role == FI_VERBS_CM_ACTIVE ||
-	    conn->cm_role == FI_VERBS_CM_SELF)
-	{
+	if ((conn->cm_role == FI_VERBS_CM_ACTIVE) ||
+	    (conn->cm_role == FI_VERBS_CM_SELF))
 		fi_ibv_rdm_unpack_cm_params(&event->param.conn, conn, ep);
-	}
 
 	VERBS_INFO(FI_LOG_AV, "CONN ESTABLISHED, conn %p, addr %s:%u\n",
 		   conn, inet_ntoa(conn->addr.sin_addr),
@@ -721,6 +720,9 @@ fi_ibv_rdm_process_event_rejected(const struct rdma_cm_event *event,
 			if (ret == FI_SUCCESS)
 				ret = -errno;
 		}
+		conn->qp[0] = NULL;
+		conn->id[0] = NULL;
+
 		VERBS_INFO(FI_LOG_AV,
 			"Rejected from conn %p, addr %s:%u, cm_role %d, status %d\n",
 			conn, inet_ntoa(conn->addr.sin_addr),
@@ -738,9 +740,9 @@ fi_ibv_rdm_process_event_rejected(const struct rdma_cm_event *event,
 			event->param.conn.private_data ?
 			*(int *)event->param.conn.private_data : 0,
 			event->status, errno);
-		conn->state = FI_VERBS_CONN_REJECTED;
-
 	}
+
+	conn->state = FI_VERBS_CONN_REJECTED;
 	return ret;
 }
 
