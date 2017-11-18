@@ -3,23 +3,49 @@
 #include <dlfcn.h>
 #include <link.h>
 
-struct util_mem_override_sym_dl {
-	struct ofi_util_mem_override_sym *sym;
-	int ret;
-};
-
-static pthread_mutex_t mem_override_install_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct ofi_util_mem_override mem_override_sym[6];
-
-static void *(*prev_dlopen_func)(const char *, int) = NULL;
-DEFINE_LIST(overrided_sym_list);
-static pthread_mutex_t overrided_sym_list_lock = PTHREAD_MUTEX_INITIALIZER;
+#define ofi_util_mem_cpp_scalar_new_sym		"_Znwm"
+#define ofi_util_mem_cpp_scalar_delete_sym	"_ZdlPv"
+#define ofi_util_mem_cpp_vector_new_sym		"_Znam"
+#define ofi_util_mem_cpp_vector_delete_sym	"_ZdaPv"
 
 #ifdef __x86_64__
 #define ELFW(x) ELF64_ ## x
 #elif defined(__i386__)
 #define ELFW(x) ELF32_ ## x
 #endif
+
+struct util_mem_override_sym_dl {
+	struct ofi_util_mem_override_sym *sym;
+	int ret;
+};
+
+static pthread_mutex_t mem_override_install_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct ofi_util_mem_override mem_override_sym[] = {
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(mmap, OFI_MEM_MMAP_EVENT),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(munmap, OFI_MEM_MUNMAP_EVENT),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(mremap, OFI_MEM_MREMAP_EVENT),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(shmat, OFI_MEM_SHMAT_EVENT),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(shmdt, OFI_MEM_SHMDT_EVENT),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(sbrk, OFI_MEM_SBRK_EVENT),
+};
+static struct ofi_util_mem_override_sym mem_override_malloc_sym[] = {
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(free),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(realloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(malloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(memalign),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(calloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(valloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(posix_memalign),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(setenv),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_new),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_delete),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_new),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_delete),
+};
+
+static void *(*prev_dlopen_func)(const char *, int) = NULL;
+DEFINE_LIST(overrided_sym_list);
+static pthread_mutex_t overrided_sym_list_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static uintptr_t util_mem_get_elf_table_ptr(ElfW(Addr) dlpi_addr,
 					    const ElfW(Phdr) *dlpi_phdr,
@@ -235,6 +261,8 @@ static int util_mem_override_install(uint64_t events)
 		if (ret)
 			goto fn;
 
+		dlist_insert_tail(&mem_override_sym[i].ov_sym.list_entry,
+				  &overrided_sym_list);
 		installed_events |= mem_override_sym[i].event;
 	}
 fn:

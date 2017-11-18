@@ -1,22 +1,117 @@
 #include <fi_util.h>
 #include <sys/mman.h>
 
-void *ofi_util_mem_override_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
-int ofi_util_mem_override_munmap(void *addr, size_t length);
-void *ofi_util_mem_override_mremap(void *old_address, size_t old_size, size_t new_size, int flags);
-void *ofi_util_mem_override_shmat(int shmid, const void *shmaddr, int shmflg);
-int ofi_util_mem_override_shmdt(const void *shmaddr);
-void *ofi_util_mem_override_sbrk(intptr_t increment);
+static inline void *ofi_util_mem_override_mmap(void *addr, size_t length, int prot,
+					       int flags, int fd, off_t offset)
+{
+	return NULL;
+}
+static inline int ofi_util_mem_override_munmap(void *addr, size_t length)
+{
+	return 0;
+}
+static inline void *ofi_util_mem_override_mremap(void *old_address, size_t old_size,
+						 size_t new_size, int flags)
+{
+	return NULL;
+}
+static inline void *ofi_util_mem_override_shmat(int shmid, const void *shmaddr,
+						int shmflg)
+{
+	return NULL;
+}
+static inline int ofi_util_mem_override_shmdt(const void *shmaddr)
+{
+	return 0;
+}
+static inline void *ofi_util_mem_override_sbrk(intptr_t increment)
+{
+	return NULL;
+}
 
-#define OFI_UTIL_MEM_OVEREIDE_SYM(sym, event)					\
-	{									\
-		{							\
+static inline void ofi_util_mem_free(void *ptr, const void *caller)
+{
+	return;
+}
+
+static inline void *ofi_util_mem_malloc(size_t size, const void *caller)
+{
+	return NULL;
+}
+
+static inline void *ofi_util_mem_realloc(void *oldptr, size_t size,
+					 const void *caller)
+{
+	return NULL;
+}
+
+static inline void *ofi_util_mem_memalign(size_t alignment, size_t size,
+					  const void *caller)
+{
+	return NULL;
+}
+
+static inline void *ofi_util_mem_calloc(size_t nmemb, size_t size)
+{
+	return NULL;
+}
+
+static inline void *ofi_util_mem_valloc(size_t size)
+{
+	return NULL;
+}
+
+static inline int ofi_util_mem_posix_memalign(void **memptr, size_t alignment,
+					      size_t size)
+{
+	return 0;
+}
+
+static inline int ofi_util_mem_setenv(const char *name, const char *value,
+				      int overwrite)
+{
+	return -1;
+}
+
+static inline void *ofi_util_mem_cpp_scalar_new(size_t size)
+{
+	return NULL;
+}
+
+static inline void ofi_util_mem_cpp_scalar_delete(void* ptr)
+{
+	return;
+}
+
+static inline void *ofi_util_mem_cpp_vector_new(size_t size)
+{
+	return NULL;
+}
+
+static inline void ofi_util_mem_cpp_vector_delete(void* ptr)
+{
+	return;
+}
+
+#define OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(sym)			\
+	{							\
+		#sym,						\
+		ofi_util_mem_ ## sym,				\
+	}
+
+#define OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(sym)		\
+	{							\
+		ofi_util_mem_cpp_ ## sym ## _sym,		\
+		ofi_util_mem_cpp_ ## sym,			\
+	}
+
+#define OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(sym, event)		\
+	{							\
+		{						\
 			#sym,					\
-			ofi_util_mem_override_ ## sym,	\
-			NULL,				\
-			{ 0, 0 }					\
-		},								\
-		event						\
+			ofi_util_mem_override_ ## sym,		\
+		},						\
+		event,						\
 	}
 
 struct ofi_util_mem_override_sym {
