@@ -1,4 +1,5 @@
 #include <fi_util.h>
+#include <sys/mman.h>
 
 void *ofi_util_mem_override_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int ofi_util_mem_override_munmap(void *addr, size_t length);
