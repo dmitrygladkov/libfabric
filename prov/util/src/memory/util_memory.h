@@ -124,11 +124,11 @@ static inline void ofi_util_mem_cpp_vector_delete(void* ptr)
 		NULL;							\
 	})
 #define OFI_UTIL_MEM_GET_GLIBC_HOOK_PTR(sym_name)					\
-	(!strcmp(sym_name, "free")	? &OFI_UTIL_MEM_GLIBC_HOOK(free)	:	\
-	 (!strcmp(sym_name, "realloc")	? &OFI_UTIL_MEM_GLIBC_HOOK(realloc)	:	\
-	  (!strcmp(sym_name, "malloc")	? &OFI_UTIL_MEM_GLIBC_HOOK(malloc)	:	\
-	   (!strcmp(sym_name, "malloc")	? &OFI_UTIL_MEM_GLIBC_HOOK(memalign)	:	\
-					  OFI_UTIL_MEM_RET_GLIBC_NULL_HOOK))))
+	(!strcmp(sym_name, "free")	  ? &OFI_UTIL_MEM_GLIBC_HOOK(free)	:	\
+	 (!strcmp(sym_name, "realloc")	  ? &OFI_UTIL_MEM_GLIBC_HOOK(realloc)	:	\
+	  (!strcmp(sym_name, "malloc")	  ? &OFI_UTIL_MEM_GLIBC_HOOK(malloc)	:	\
+	   (!strcmp(sym_name, "memalign") ? &OFI_UTIL_MEM_GLIBC_HOOK(memalign)	:	\
+					    OFI_UTIL_MEM_RET_GLIBC_NULL_HOOK))))
 		
 #define OFI_UTIL_MEM_INSTALL_HOOK(hook, over_sym)			\
 	({								\
