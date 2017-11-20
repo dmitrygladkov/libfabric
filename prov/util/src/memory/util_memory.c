@@ -2,6 +2,7 @@
 #include <sys/auxv.h>
 #include <dlfcn.h>
 #include <link.h>
+#include <malloc.h>
 
 #define ofi_util_mem_cpp_scalar_new_sym		"_Znwm"
 #define ofi_util_mem_cpp_scalar_delete_sym	"_ZdlPv"
@@ -13,6 +14,39 @@
 #elif defined(__i386__)
 #define ELFW(x) ELF32_ ## x
 #endif
+
+enum ofi_util_mem_override_malloc {
+	/* Should be used either Glibc hooks or Override symbols */
+	/* 1 - free, realloc, malloc, memalign GLIBC hooks */
+	OFI_MEM_MALLOC_GLIBC_HOOKS			= 1 << 1,
+	/* 2 - free, realloc, malloc, memalign Override symbols */
+	OFI_MEM_MALLOC_GLIBC_HOOKS_REPLACE_SYMBOLS	= 1 << 2,
+
+	/* calloc, valloc, posix_memalign, setenv,
+	 * scalar/vector new, scalar/vector delete */
+	OFI_MEM_MALLOC_OTHER_SYMBOLS			= 1 << 3,
+	OFI_MEM_MALLOC_SBRK_HANDLER			= 1 << 4,
+	OFI_MEM_MALLOC_OPTIONAL				= 1 << 5,
+};
+
+struct util_mem_override_memory_main {
+	fastlock_t	mem_override_install_lock;
+	struct {
+		int		installed_events;	
+	} mem_events;
+	struct {
+		int		installed_events;
+		int		is_mem_events_ready;
+	} mem_malloc_events;
+} util_mem_override_main = {
+	.mem_events = {
+		.installed_events	= 0,
+	},
+	.mem_malloc_events = {
+		.installed_events	= 0,
+		.is_mem_events_ready	= 0,
+	},
+};
 
 struct util_mem_override_sym_dl {
 	struct ofi_util_mem_override_sym *sym;
@@ -28,19 +62,22 @@ static struct ofi_util_mem_override mem_override_sym[] = {
 	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(shmdt, OFI_MEM_SHMDT_EVENT),
 	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(sbrk, OFI_MEM_SBRK_EVENT),
 };
-static struct ofi_util_mem_override_sym mem_override_malloc_sym[] = {
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(free),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(realloc),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(malloc),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(memalign),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(calloc),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(valloc),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(posix_memalign),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(setenv),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_new),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_delete),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_new),
-	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_delete),
+struct ofi_util_mem_overrid_malloc_sym {
+	struct ofi_util_mem_override_sym sym;
+	int is_glibc_hook;
+} mem_override_malloc_sym [] = {
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(free),		1 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(realloc),		1 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(malloc),		1 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(memalign),		1 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(calloc),		0 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(valloc),		0 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(posix_memalign),	0 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(setenv),		0 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_new),	0 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_delete),	0 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_new),	0 },
+	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_delete),	0 },
 };
 
 static void *(*prev_dlopen_func)(const char *, int) = NULL;
@@ -253,7 +290,7 @@ static int util_mem_override_install(uint64_t events)
 	if (ret)
 		goto fn;
 
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < count_of(mem_override_sym); i++) {
 		if ((mem_override_sym[i].event & events) ||
 		    (mem_override_sym[i].event & installed_events))
 			continue;
@@ -263,7 +300,20 @@ static int util_mem_override_install(uint64_t events)
 
 		dlist_insert_tail(&mem_override_sym[i].ov_sym.list_entry,
 				  &overrided_sym_list);
-		installed_events |= mem_override_sym[i].event;
+		util_mem_override_main.mem_events.installed_events |=
+			mem_override_sym[i].event;
+	}
+
+	for (i = 0; i < count_of(mem_override_malloc_sym); i++) {
+		void **glibc_hook = (void **)(OFI_UTIL_MEM_GET_GLIBC_HOOK_PTR(
+			mem_override_malloc_sym[i].sym.func_symbol));
+		ret = ((mem_override_malloc_sym[i].is_glibc_hook && glibc_hook) ?
+			OFI_UTIL_MEM_INSTALL_HOOK(*glibc_hook,
+						  &mem_override_malloc_sym[i].sym) :
+			OFI_UTIL_MEM_INSTALL_MALLOC_SYM(&mem_override_malloc_sym[i].sym,
+							&overrided_sym_list));
+		if (ret)
+			goto fn;
 	}
 fn:
 	pthread_mutex_unlock(&mem_override_install_lock);

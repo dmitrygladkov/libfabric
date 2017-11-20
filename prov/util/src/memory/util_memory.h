@@ -114,6 +114,48 @@ static inline void ofi_util_mem_cpp_vector_delete(void* ptr)
 		event,						\
 	}
 
+/*#if HAVE_MALLOC_HOOK*/
+#define OFI_UTIL_MEM_GLIBC_HOOK(hook)		\
+	__ ## hook ## _hook
+#define OFI_UTIL_MEM_RET_GLIBC_NULL_HOOK				\
+	({								\
+		assert(0 && "Unable to find an appropriate "		\
+		       "Glibc memory hook. Something is going wrong");	\
+		NULL;							\
+	})
+#define OFI_UTIL_MEM_GET_GLIBC_HOOK_PTR(sym_name)					\
+	(!strcmp(sym_name, "free")	? &OFI_UTIL_MEM_GLIBC_HOOK(free)	:	\
+	 (!strcmp(sym_name, "realloc")	? &OFI_UTIL_MEM_GLIBC_HOOK(realloc)	:	\
+	  (!strcmp(sym_name, "malloc")	? &OFI_UTIL_MEM_GLIBC_HOOK(malloc)	:	\
+	   (!strcmp(sym_name, "malloc")	? &OFI_UTIL_MEM_GLIBC_HOOK(memalign)	:	\
+					  OFI_UTIL_MEM_RET_GLIBC_NULL_HOOK))))
+		
+#define OFI_UTIL_MEM_INSTALL_HOOK(hook, over_sym)			\
+	({								\
+		(hook) = (over_sym)->func;				\
+		FI_SUCCESS;						\
+	})
+/*#else
+#define OFI_UTIL_MEM_GLIBC_HOOK(hook)		\
+	NULL
+#define OFI_UTIL_MEM_GET_GLIBC_HOOK(sym_name)			\
+	NULL
+#define OFI_UTIL_MEM_INSTALL_HOOK(hook, over_sym)			\
+	({							\
+		int ret = util_mem_override_sym(over_sym);	\
+		ret;						\
+	})
+	#endif*/
+
+#define OFI_UTIL_MEM_INSTALL_MALLOC_SYM(over_sym, over_sym_list)		\
+	({									\
+		int ret = util_mem_override_sym(over_sym);			\
+		if (!ret)							\
+			dlist_insert_tail(&(over_sym)->list_entry,		\
+					  over_sym_list);			\
+		ret;								\
+	})
+
 struct ofi_util_mem_override_sym {
 	const char		*func_symbol;
 	void			*func;
