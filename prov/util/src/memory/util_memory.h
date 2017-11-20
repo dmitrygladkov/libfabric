@@ -114,7 +114,7 @@ static inline void ofi_util_mem_cpp_vector_delete(void* ptr)
 		event,						\
 	}
 
-/*#if HAVE_MALLOC_HOOK*/
+/*#if HAVE_GLIBC_MALLOC_HOOK*/
 #define OFI_UTIL_MEM_GLIBC_HOOK(hook)		\
 	__ ## hook ## _hook
 #define OFI_UTIL_MEM_RET_GLIBC_NULL_HOOK				\
@@ -135,17 +135,14 @@ static inline void ofi_util_mem_cpp_vector_delete(void* ptr)
 		(hook) = (over_sym)->func;				\
 		FI_SUCCESS;						\
 	})
-/*#else
-#define OFI_UTIL_MEM_GLIBC_HOOK(hook)		\
-	NULL
-#define OFI_UTIL_MEM_GET_GLIBC_HOOK(sym_name)			\
-	NULL
-#define OFI_UTIL_MEM_INSTALL_HOOK(hook, over_sym)			\
-	({							\
-		int ret = util_mem_override_sym(over_sym);	\
-		ret;						\
-	})
-	#endif*/
+/*#else /* !HAVE_GLIBC_MALLOC_HOOK */
+/*#define OFI_UTIL_MEM_GET_GLIBC_HOOK_PTR(sym_name) NULL /* Returns NULL aleways */
+/*#define OFI_UTIL_MEM_INSTALL_HOOK(hook, over_sym)*/
+/*({ /* Do nothing if Glibc hooks aren't defined*/
+/* OFI_UNUSED(hook);*/
+/* OFI_UNUSED(over_sym);*/
+/* })*/
+/*#endif /* HAVE_GLIBC_MALLOC_HOOK */
 
 #define OFI_UTIL_MEM_INSTALL_MALLOC_SYM(over_sym, over_sym_list)		\
 	({									\

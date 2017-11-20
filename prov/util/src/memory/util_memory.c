@@ -30,7 +30,7 @@ enum ofi_util_mem_override_malloc {
 };
 
 struct util_mem_override_memory_main {
-	fastlock_t	mem_override_install_lock;
+	fastlock_t		mem_override_install_lock;
 	struct {
 		int		installed_events;	
 	} mem_events;
@@ -62,22 +62,20 @@ static struct ofi_util_mem_override mem_override_sym[] = {
 	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(shmdt, OFI_MEM_SHMDT_EVENT),
 	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM_EX(sbrk, OFI_MEM_SBRK_EVENT),
 };
-struct ofi_util_mem_overrid_malloc_sym {
-	struct ofi_util_mem_override_sym sym;
-	int is_glibc_hook;
-} mem_override_malloc_sym [] = {
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(free),		1 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(realloc),		1 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(malloc),		1 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(memalign),		1 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(calloc),		0 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(valloc),		0 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(posix_memalign),	0 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(setenv),		0 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_new),	0 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_delete),	0 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_new),	0 },
-	{ OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_delete),	0 },
+
+static struct ofi_util_mem_override_sym mem_override_malloc_sym[] = {
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(free),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(realloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(malloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(memalign),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(calloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(valloc),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(posix_memalign),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_SYM(setenv),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_new),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(scalar_delete),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_new),
+	OFI_UTIL_MEM_DEFINE_OVERRIDE_CPP_SYM(vector_delete),
 };
 
 static void *(*prev_dlopen_func)(const char *, int) = NULL;
@@ -306,11 +304,11 @@ static int util_mem_override_install(uint64_t events)
 
 	for (i = 0; i < count_of(mem_override_malloc_sym); i++) {
 		void **glibc_hook = (void **)(OFI_UTIL_MEM_GET_GLIBC_HOOK_PTR(
-			mem_override_malloc_sym[i].sym.func_symbol));
-		ret = ((mem_override_malloc_sym[i].is_glibc_hook && glibc_hook) ?
+			mem_override_malloc_sym[i].func_symbol));
+		ret = (glibc_hook ?
 			OFI_UTIL_MEM_INSTALL_HOOK(*glibc_hook,
-						  &mem_override_malloc_sym[i].sym) :
-			OFI_UTIL_MEM_INSTALL_MALLOC_SYM(&mem_override_malloc_sym[i].sym,
+						  &mem_override_malloc_sym[i]) :
+			OFI_UTIL_MEM_INSTALL_MALLOC_SYM(&mem_override_malloc_sym[i],
 							&overrided_sym_list));
 		if (ret)
 			goto fn;
