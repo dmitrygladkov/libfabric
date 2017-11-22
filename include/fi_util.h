@@ -810,4 +810,113 @@ int ofi_ns_del_local_name(struct util_ns *ns, void *service, void *name);
 void *ofi_ns_resolve_name(struct util_ns *ns, const char *server,
 			  void *service);
 
+/*
+ * SMRN - shared memory notification monitor
+ */
+
+struct util_smrn_attr {
+	struct fi_provider	*prov;
+
+	int (*init)(void);
+	int (*open)(void **notifier);
+	int (*close)(void *notifier);
+	int (*monitor)(void *notifier, void *addr,
+		       uint64_t len, uint64_t cookie);
+	int (*unmonitor)(void *notifier, uint64_t cookie);
+	int (*get_event)(void *notifier, void *buf, size_t len);
+};
+
+/**
+ * @brief shared memory registration notifier
+ *
+ * @var	lock	Only used for set up and tear down (no guarantees
+ *		if reading or writing while setting up or tearing down)
+ */
+struct util_smrn {
+	fastlock_t		lock;
+	struct util_smrn_attr	attr;
+	void			*notifier;
+	struct dlist_entry	rq_head;
+	int			references;
+};
+
+struct util_smrn_rq {
+	fastlock_t		lock;
+	struct dlist_entry	list;
+	struct dlist_entry	entry;
+};
+
+struct util_smrn_context {
+	struct util_smrn_rq	*rq;
+	uint64_t		cookie;
+	struct dlist_entry	entry;
+};
+
+int ofi_util_srn_init(void);
+
+/**
+ * @brief open the prepare for notifications
+ *
+ * @param[in,out] smrn	Empty and initialized util_smrn struct
+ * @return		FI_SUCESSS on success
+ *			-FI_EBUSY if device already open
+ *			-FI_ENODATA if user delta unavailable
+ *			-fi_errno or -errno on other failures
+ */
+int ofi_util_smrn_open(struct util_smrn **smrn);
+
+/**
+ * @brief close the kdreg device and zero the notifier
+ *
+ * @param[in] smrn	util_smrn struct
+ * @return		FI_SUCESSS on success
+ *			-fi_errno or -errno on other failures
+ */
+int ofi_util_smrn_close(struct util_smrn *mrn);
+
+/**
+ * @brief monitor a memory region
+ *
+ * @param[in] smrn	util_smrn struct
+ * @param[in] rq	util_smrn_rq struct
+ * @param[in] addr	address of memory region to monitor
+ * @param[in] len	length of memory region
+ * @param[in] cookie    user identifier associated with the region
+ * @param[in] context	smrn context
+ * @return              FI_SUCESSS on success
+ *                      -fi_errno or -errno on failure
+ */
+int ofi_util_smrn_monitor(struct util_smrn *smrn,
+			  struct util_smrn_rq *rq,
+			  void *addr, uint64_t len,
+			  uint64_t cookie,
+			  struct util_smrn_context *context);
+
+/**
+ * @brief stop monitoring a memory region
+ *
+ * @param[in]  smrn	util_smrn struct
+ * @param[in] cookie	user identifier for notification event
+ * @param[in] cookie	smrn context
+ * @return		FI_SUCESSS on success
+ *			-fi_errno or -errno on failure
+ */
+int ofi_util_smrn_unmonitor(struct util_smrn *smrn,
+			    uint64_t cookie,
+			    struct util_smrn_context *context);
+
+/**
+ * @brief get a monitoring event
+ *
+ * @param[in]  smrn	util_smrn struct
+ * @param[in]  rq	util_smrn_rq struct
+ * @param[out] context	smrn context
+ * @return		Number of bytes read on success
+ *			-FI_EINVAL if invalid arguments
+ *			-FI_EAGAIN if nothing to read
+ *			-fi_errno or -errno on failure
+ */
+int ofi_util_smrn_get_event(struct util_smrn *smrn,
+			    struct util_smrn_rq *rq,
+			    struct util_smrn_context **context);
 #endif
