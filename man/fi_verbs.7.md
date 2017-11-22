@@ -170,6 +170,9 @@ The verbs provider checks for the following environment variables.
 : The prefix or the full name of the network interface associated with the verbs
   device (default: ib)
 
+*FI_VERBS_MR_CACHE*
+: Enable MR caching for buffers that is being registered to be accessed by Network devices.
+  The following modes are supported - off, on, lazy (default: lazy)
 
 ### Variables specific to RDM endpoints
 

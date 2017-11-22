@@ -43,6 +43,12 @@ static const char *local_node = "localhost";
 
 #define VERBS_DEFAULT_MIN_RNR_TIMER 12
 
+static char const *mr_cache_policy_str[] = {
+	"off",
+	"on",
+	"lazy"
+};
+
 struct fi_ibv_gl_data fi_ibv_gl_data = {
 	.def_tx_size		= 384,
 	.def_rx_size		= 384,
@@ -56,6 +62,10 @@ struct fi_ibv_gl_data fi_ibv_gl_data = {
 	.use_odp		= 0,
 	.cqread_bunch_size	= 8,
 	.iface			= NULL,
+	.mr_cache_policy	= {
+		.policy			= FI_IBV_MR_CACHE_LAZY,
+		.policy_str		= "lazy",
+	},
 
 	.rdm			= {
 		.buffer_num		= FI_IBV_RDM_TAGGED_DFLT_BUFFER_NUM,
@@ -654,6 +664,25 @@ static int fi_ibv_read_params(void)
 		VERBS_WARN(FI_LOG_CORE,
 			   "Invalid value of iface\n");
 		return -FI_EINVAL;
+	}
+	if (fi_ibv_get_param_str("mr_cache_policy", "Enable MR caching for buffers "
+				 "that is being registered to be accessed by Network devices. "
+				 "The following modes are supported - off, on, lazy",
+				 &fi_ibv_gl_data.mr_cache_policy.policy_str)) {
+		VERBS_WARN(FI_LOG_CORE,
+			   "Invalid value of mr_cache_policy\n");
+		return -FI_EINVAL;
+	} else {
+		uint8_t i;
+		for (i = 0; i < count_of(mr_cache_policy_str); i++) {
+			if (!strcmp(fi_ibv_gl_data.mr_cache_policy.policy_str,
+				    mr_cache_policy_str[i])) {
+				fi_ibv_gl_data.mr_cache_policy.policy = i;
+				break;
+			}
+		}
+		if (i == count_of(mr_cache_policy_str))
+			return -FI_EINVAL;
 	}
 
 	/* RDM-specific parameters */

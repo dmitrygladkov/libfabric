@@ -164,6 +164,14 @@ extern struct fi_ibv_gl_data {
 	int	use_odp;
 	int	cqread_bunch_size;
 	char	*iface;
+	struct {
+		enum {
+			FI_IBV_MR_CACHE_OFF	= 0,
+			FI_IBV_MR_CACHE_ON	= 1,
+			FI_IBV_MR_CACHE_LAZY	= 2,
+		}		policy;
+		char		*policy_str;
+	} mr_cache_policy;
 
 	struct {
 		int	buffer_num;
@@ -178,6 +186,9 @@ extern struct fi_ibv_gl_data {
 		int	name_server_port;
 	} dgram;
 } fi_ibv_gl_data;
+
+extern struct fi_ops_mr fi_ibv_domain_mr_w_cache_ops;
+extern struct fi_ops_mr fi_ibv_domain_mr_wo_cache_ops;
 
 struct verbs_addr {
 	struct dlist_entry entry;
@@ -320,6 +331,29 @@ struct fi_ibv_pep {
 struct fi_ops_cm *fi_ibv_pep_ops_cm(struct fi_ibv_pep *pep);
 struct fi_ibv_rdm_cm;
 
+struct fi_ibv_mem_desc {
+	struct fid_mr		mr_fid;
+	struct ibv_mr		*mr;
+	struct fi_ibv_domain	*domain;
+};
+
+struct fi_ibv_mr_cache_ops {
+	int (*init)(struct fid_domain *domain_fid);
+	int (*is_init)(struct fid_domain *domain_fid);
+	int (*reg_mr)(struct fid_domain *domain_fid, uint64_t address,
+		      uint64_t length, struct util_fi_reg_context *fi_reg_context,
+		      void **handle);
+	int (*dereg_mr)(struct fi_ibv_domain *domain_fid,
+			struct fi_ibv_mem_desc *mr_fid);
+	int (*destroy_cache)(struct fid_domain *domain_fid);
+	int (*flush_cache)(struct fid_domain *domain_fid);
+};
+
+extern struct fi_ibv_mr_cache_ops fi_ibv_mr_cache_ops;
+extern struct util_mr_cache_attr fi_ibv_mr_cache_attr_def;
+
+int fi_ibv_open_mr_cache(struct fid_domain *domain_fid);
+
 struct fi_ibv_domain {
 	struct util_domain	util_domain;
 	struct ibv_context	*verbs;
@@ -336,6 +370,11 @@ struct fi_ibv_domain {
 	/* This EQ is utilized by verbs/RDM and verbs/DGRAM */
 	struct fi_ibv_eq	*eq;
 	uint64_t		eq_flags;
+
+	struct util_mr_cache_attr	mr_cache_attr;
+	struct util_mr_cache		*mr_cache;
+	int				mr_cache_inuse;
+	struct fi_ibv_mr_cache_ops	*mr_cache_ops;
 };
 
 struct fi_ibv_cq;
@@ -407,12 +446,6 @@ struct fi_ibv_rdm_cq {
 
 int fi_ibv_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		   struct fid_cq **cq, void *context);
-
-struct fi_ibv_mem_desc {
-	struct fid_mr		mr_fid;
-	struct ibv_mr		*mr;
-	struct fi_ibv_domain	*domain;
-};
 
 struct fi_ibv_srq_ep {
 	struct fid_ep		ep_fid;
