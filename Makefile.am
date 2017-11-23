@@ -60,8 +60,7 @@ common_srcs =				\
 	prov/util/src/util_mr.c		\
 	prov/util/src/util_ns.c		\
 	prov/util/src/util_shm.c	\
-	prov/util/src/util_smrn.c	\
-	prov/util/src/util_mr_cache.c
+	prov/util/src/util_mr_mgr.c
 
 if MACOS
 common_srcs += src/unix/osd.c
