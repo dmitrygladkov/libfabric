@@ -850,6 +850,65 @@ static int util_mr_mgr_search_stale(struct ofi_mr_mgr *mgr,
 	return -FI_ENOENT;
 }
 
+static int util_mr_mgr_create_registration(struct ofi_mr_mgr *mgr,
+					   struct fi_mr_attr *mr_attr,
+					   struct ofi_mr_region **entry)
+{
+	int ret;
+	struct ofi_mr_region *current_entry;
+
+	/* if we made it here, we didn't find the entry at all */
+	current_entry = calloc(1, sizeof(*current_entry));
+	if (!current_entry)
+		return -FI_ENOMEM;
+
+	dlist_init(&current_entry->lru_entry);
+	dlist_init(&current_entry->children);
+	dlist_init(&current_entry->siblings);
+
+	ret = mgr->attr.registration_fn(mgr, mr_attr, current_entry->handle);
+	if (OFI_UNLIKELY(ret)) {
+		FI_INFO(&core_prov, FI_LOG_MR,
+			"failed to register memory with callback\n");
+		goto err;
+	}
+
+	util_mr_mgr_entry_reset_state(current_entry);
+
+	/* set up the entry's iov/key */
+	current_entry->iov = mr_attr->mr_iov[0];
+
+	ret = util_mr_cache_notifier_monitor(mgr, current_entry);
+	if (OFI_UNLIKELY(ret))
+		goto err_dereg;
+
+	ret = rbtInsert(mgr->mr_inuse_tree, &current_entry->iov,
+			current_entry);
+	if (OFI_UNLIKELY(ret != RBT_STATUS_OK)) {
+		FI_WARN(&core_prov, FI_LOG_MR,
+			"failed to insert registration into cache, ret=%i\n",
+			ret);
+		goto err_dereg;
+	}
+
+	FI_DBG(&core_prov, FI_LOG_MR,
+	       "inserted key %"PRIu64":%"PRIu64" into inuse %p\n",
+	       IOV_BASE_2_KEY_ADDR(&current_entry->iov),
+	       current_entry->iov.iov_len, current_entry);
+
+	ofi_atomic_initialize32(&current_entry->use_cnt, 1);
+
+	*entry = current_entry;
+
+	return FI_SUCCESS;
+
+err_dereg:
+	mgr->attr.deregistration_fn(mgr, current_entry->handle);
+err:
+	free(current_entry);
+	return -FI_ENOMEM;
+}
+
 void ofi_mgr_mgr_cleanup(struct ofi_mr_mgr *mgr)
 {
 	if (mgr->state != OFI_MR_MGR_STATE_READY)
