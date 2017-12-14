@@ -147,6 +147,9 @@ static int fi_ibv_domain_close(fid_t fid)
 		return -FI_EINVAL;
 	}
 
+	if (fi_ibv_gl_data.mr_cache_enable)
+		ofi_mr_cache_cleanup(&domain->cache);
+
 	if (domain->pd) {
 		ret = ibv_dealloc_pd(domain->pd);
 		if (ret)
@@ -252,6 +255,26 @@ static struct fi_ops_domain fi_ibv_dgram_domain_ops = {
 	.query_atomic = fi_no_query_atomic,
 };
 
+static void fi_ibv_domain_process_exp(struct fi_ibv_domain *domain)
+{
+#ifdef HAVE_VERBS_EXP_H
+	struct ibv_exp_device_attr exp_attr= {
+		.comp_mask = IBV_EXP_DEVICE_ATTR_ODP |
+			     IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS,
+	};
+	domain->use_odp = (!ibv_exp_query_device(domain->verbs, &exp_attr) &&
+			   exp_attr.exp_device_cap_flags & IBV_EXP_DEVICE_ODP);
+#else /* HAVE_VERBS_EXP_H */
+	domain->use_odp = 0;
+#endif /* HAVE_VERBS_EXP_H */
+	if (!domain->use_odp && fi_ibv_gl_data.use_odp) {
+		VERBS_WARN(FI_LOG_CORE,
+			   "ODP is not supported on this configuration, ignore \n");
+		return;
+	}
+	domain->use_odp = fi_ibv_gl_data.use_odp;
+}
+
 static int
 fi_ibv_domain(struct fid_fabric *fabric, struct fi_info *info,
 	      struct fid_domain **domain, void *context)
@@ -300,7 +323,38 @@ fi_ibv_domain(struct fid_fabric *fabric, struct fi_info *info,
 	_domain->util_domain.domain_fid.fid.fclass = FI_CLASS_DOMAIN;
 	_domain->util_domain.domain_fid.fid.context = context;
 	_domain->util_domain.domain_fid.fid.ops = &fi_ibv_fid_ops;
-	_domain->util_domain.domain_fid.mr = &fi_ibv_domain_mr_ops;
+
+	fi_ibv_domain_process_exp(_domain);
+
+	
+	if (fi_ibv_gl_data.mr_cache_enable) {
+		ofi_monitor_init(&_domain->monitor);
+		_domain->monitor.subscribe = fi_ibv_monitor_subscribe;
+		_domain->monitor.unsubscribe = fi_ibv_monitor_unsubscribe;
+		_domain->monitor.get_event = fi_ibv_monitor_get_event;
+		_domain->cache.size = 4096;
+		_domain->cache.entry_data_size = sizeof(struct fi_ibv_mem_desc);
+		_domain->cache.add_region = fi_ibv_mr_cache_entry_reg;
+		_domain->cache.delete_region = fi_ibv_mr_cache_entry_dereg;
+
+		ret = ofi_mr_cache_init(&_domain->util_domain, &_domain->monitor,
+					&_domain->cache);
+		if (ret)
+			goto err4;
+		if (fi_ibv_gl_data.mr_cache_lazy_size) {
+			_domain->util_domain.domain_fid.mr = fi_ibv_mr_internal_ex_ops.fi_ops;
+			_domain->internal_mr_reg = fi_ibv_mr_internal_ex_ops.internal_mr_reg;
+			_domain->internal_mr_dereg = fi_ibv_mr_internal_ex_ops.internal_mr_dereg;
+		} else {
+			_domain->util_domain.domain_fid.mr = fi_ibv_mr_internal_cache_ops.fi_ops;
+			_domain->internal_mr_reg = fi_ibv_mr_internal_cache_ops.internal_mr_reg;
+			_domain->internal_mr_dereg = fi_ibv_mr_internal_cache_ops.internal_mr_dereg;
+		}
+	} else {
+		_domain->util_domain.domain_fid.mr = fi_ibv_mr_internal_ops.fi_ops;
+		_domain->internal_mr_reg = fi_ibv_mr_internal_ops.internal_mr_reg;
+		_domain->internal_mr_dereg = fi_ibv_mr_internal_ops.internal_mr_dereg;
+	}
 
 	switch (_domain->ep_type) {
 	case FI_EP_RDM:
@@ -397,6 +451,8 @@ err6:
 err5:
 	pthread_mutex_destroy(&_domain->rdm_cm->cm_lock);
 	free(_domain->rdm_cm);
+	if (fi_ibv_gl_data.mr_cache_enable)
+		ofi_mr_cache_cleanup(&_domain->cache);
 err4:
 	if (ibv_dealloc_pd(_domain->pd))
 		VERBS_INFO_ERRNO(FI_LOG_DOMAIN,
