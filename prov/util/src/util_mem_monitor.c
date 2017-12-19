@@ -93,14 +93,28 @@ int ofi_monitor_subscribe(struct ofi_notification_queue *nq,
 	return ret;
 }
 
+static inline int
+util_monitor_find_match_subscription(struct dlist_entry *item, const void *arg)
+{
+	return ((container_of(item, struct ofi_subscription, entry) ==
+		 (struct ofi_subscription *)arg) ? 1 : 0);
+}
+
 void ofi_monitor_unsubscribe(void *addr, size_t len,
 			     struct ofi_subscription *subscription)
 {
+	FI_DBG(&core_prov, FI_LOG_MR,
+	       "unsubscribing addr=%p len=%zu subscription=%p\n",
+	       addr, len, subscription);
 	subscription->nq->monitor->unsubscribe(subscription->nq->monitor,
 						addr, len, subscription);
 	fastlock_acquire(&subscription->nq->lock);
 	dlist_remove_init(&subscription->entry);
 	subscription->nq->refcnt--;
+	while (dlist_remove_first_match(&subscription->nq->list,
+					util_monitor_find_match_subscription,
+					subscription))
+		;
 	fastlock_release(&subscription->nq->lock);
 }
 

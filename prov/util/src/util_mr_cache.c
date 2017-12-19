@@ -141,6 +141,8 @@ util_mr_cache_create(struct ofi_mr_cache *cache, const struct iovec *iov,
 	FI_DBG(cache->domain->prov, FI_LOG_MR, "create %p (len: %" PRIu64 ")\n",
 	       iov->iov_base, iov->iov_len);
 
+	util_mr_cache_process_events(cache);
+
 	*entry = calloc(1, sizeof(**entry) + cache->entry_data_size);
 	if (!*entry)
 		return -FI_ENOMEM;
@@ -255,6 +257,8 @@ void ofi_mr_cache_cleanup(struct ofi_mr_cache *cache)
 	FI_INFO(cache->domain->prov, FI_LOG_MR, "MR cache stats: "
 		"searches %" PRIu64 ", deletes %" PRIu64 ", hits %" PRIu64 "\n",
 		cache->search_cnt, cache->delete_cnt, cache->hit_cnt);
+
+	util_mr_cache_process_events(cache);
 
 	dlist_foreach_container_safe(&cache->lru_list, struct ofi_mr_entry,
 				     entry, lru_entry, tmp) {
