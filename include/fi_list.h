@@ -65,6 +65,16 @@ static inline int dlist_empty(struct dlist_entry *head)
 	return head->next == head;
 }
 
+static inline void dlist_entry_init(struct dlist_entry *item)
+{
+	item->next = item->prev = NULL;
+}
+
+static inline int dlist_entry_empty(struct dlist_entry *item)
+{
+	return ((item->next == NULL) && (item->prev == NULL));
+}
+
 static inline void
 dlist_insert_after(struct dlist_entry *item, struct dlist_entry *head)
 {
@@ -93,6 +103,12 @@ static inline void dlist_remove_init(struct dlist_entry *item)
 {
 	dlist_remove(item);
 	dlist_init(item);
+}
+
+static inline void dlist_entry_remove_init(struct dlist_entry *item)
+{
+	dlist_remove(item);
+	dlist_entry_init(item);
 }
 
 #define dlist_pop_front(head, type, container, member)			\
