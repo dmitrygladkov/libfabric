@@ -64,6 +64,7 @@
 #include "fi.h"
 #include "ofi_atomic.h"
 #include "fi_enosys.h"
+#include <uthash.h>
 #include "prov.h"
 #include "fi_list.h"
 #include "fi_signal.h"
@@ -333,6 +334,16 @@ typedef int(*fi_ibv_mr_reg_cb)(struct fi_ibv_domain *domain, void *buf,
 			       struct fi_ibv_mem_desc *md);
 typedef int(*fi_ibv_mr_dereg_cb)(struct fi_ibv_mem_desc *md);
 
+void fi_ibv_domain_free_hook(void *ptr, const void *caller);
+void *fi_ibv_domain_realloc_hook(void *ptr, size_t size, const void *caller);
+
+struct fi_ibv_mem_ptr_entry {
+	struct dlist_entry	entry;
+	void			*addr;
+	struct ofi_subscription *subscription;
+	UT_hash_handle		hh;
+};
+
 struct fi_ibv_domain {
 	struct util_domain	util_domain;
 	struct ibv_context	*verbs;
@@ -356,6 +367,11 @@ struct fi_ibv_domain {
 	struct ofi_mem_monitor	monitor;
 	fi_ibv_mr_reg_cb	internal_mr_reg;
 	fi_ibv_mr_dereg_cb	internal_mr_dereg;
+	struct fi_ibv_mem_ptr_entry	*mem_ptrs_hash;
+	struct util_buf_pool	*mem_ptrs_ent_pool;
+	struct dlist_entry	event_list;
+	void (*prev_free_hook)(void *, const void *);
+	void *(*prev_realloc_hook)(void *, size_t, const void *);
 };
 
 struct fi_ibv_cq;

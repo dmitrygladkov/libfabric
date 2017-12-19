@@ -377,17 +377,66 @@ static struct fi_ops fi_ibv_mr_cache_ops = {
 int fi_ibv_monitor_subscribe(struct ofi_mem_monitor *notifier, void *addr,
 			     size_t len, struct ofi_subscription *subscription)
 {
+	struct fi_ibv_domain *domain =
+		container_of(notifier, struct fi_ibv_domain, monitor);
+	struct fi_ibv_mem_ptr_entry *entry =
+		util_buf_alloc(domain->mem_ptrs_ent_pool);
+	if (!entry)
+		return -FI_ENOMEM;
+
+	entry->addr = addr;
+	entry->subscription = subscription;
+	HASH_ADD(hh, domain->mem_ptrs_hash, addr, sizeof(void *), entry);
+
 	return FI_SUCCESS;
+}
+
+static inline int
+fi_ibv_find_match_subscription(struct dlist_entry *item, const void *arg)
+{
+	struct fi_ibv_mem_ptr_entry *found_entry =
+		(container_of(item, struct fi_ibv_mem_ptr_entry, entry));
+	return ((found_entry->subscription == (struct ofi_subscription *)arg) ? 1 : 0);
 }
 
 void fi_ibv_monitor_unsubscribe(struct ofi_mem_monitor *notifier, void *addr,
 				size_t len, struct ofi_subscription *subscription)
 {
+	struct fi_ibv_domain *domain =
+		container_of(notifier, struct fi_ibv_domain, monitor);
+	struct fi_ibv_mem_ptr_entry *entry;
+
+	HASH_FIND(hh, domain->mem_ptrs_hash, &addr, sizeof(void *), entry);
+	assert(entry);
+#ifdef HAVE_GLIBC_MALLOC_HOOKS
+	__free_hook = domain->prev_free_hook;
+#endif
+	HASH_DEL(domain->mem_ptrs_hash, entry);
+#ifdef HAVE_GLIBC_MALLOC_HOOKS
+	__free_hook = fi_ibv_domain_free_hook;
+#endif
+	while (dlist_remove_first_match(&domain->event_list,
+					fi_ibv_find_match_subscription,
+					subscription))
+		;
+	util_buf_release(domain->mem_ptrs_ent_pool, entry);
 }
 
-struct ofi_subscription *fi_ibv_monitor_get_event(struct ofi_mem_monitor *notifier)
+struct ofi_subscription *
+fi_ibv_monitor_get_event(struct ofi_mem_monitor *notifier)
 {
-	return NULL;
+	struct fi_ibv_domain *domain =
+		container_of(notifier, struct fi_ibv_domain, monitor);
+	struct fi_ibv_mem_ptr_entry *entry;
+
+	if (!dlist_empty(&domain->event_list)) {
+		dlist_pop_front(&domain->event_list,
+				struct fi_ibv_mem_ptr_entry,
+				entry, entry);
+		return entry->subscription;
+	} else {
+		return NULL;
+	}
 }
 
 int fi_ibv_mr_cache_entry_reg(struct ofi_mr_cache *cache,

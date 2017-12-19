@@ -36,6 +36,10 @@
 #include "ep_dgram/verbs_dgram.h"
 
 #include "fi_verbs.h"
+#include <malloc.h>
+
+/* temporary solution for MR caching case */
+static struct fi_ibv_domain *global_domain = NULL;
 
 static int fi_ibv_domain_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 {
@@ -96,6 +100,98 @@ static void *fi_ibv_rdm_cm_progress_thread(void *dom)
 	return NULL;
 }
 
+#ifdef HAVE_GLIBC_MALLOC_HOOKS
+void fi_ibv_domain_free_hook(void *ptr, const void *caller)
+{
+	struct fi_ibv_mem_ptr_entry *entry;
+	OFI_UNUSED(caller);
+
+	__free_hook = global_domain->prev_free_hook;
+	free(ptr);
+	__free_hook = fi_ibv_domain_free_hook;
+
+	if (!ptr)
+		return;
+
+	HASH_FIND(hh, global_domain->mem_ptrs_hash, &ptr, sizeof(void *), entry);
+	if (!entry)
+		return;
+
+#if ENABLE_DEBUG
+	__free_hook = global_domain->prev_free_hook;
+	VERBS_DBG(FI_LOG_MR, "Catch free for %p, entry - %p\n", ptr, entry);
+	__free_hook = fi_ibv_domain_free_hook;
+#endif
+	dlist_insert_tail(&entry->entry,
+			  &global_domain->event_list);
+}
+
+void *fi_ibv_domain_realloc_hook(void *ptr, size_t size, const void *caller)
+{
+	struct fi_ibv_mem_ptr_entry *entry;
+	void *ret_ptr;
+	OFI_UNUSED(caller);
+
+	__realloc_hook = global_domain->prev_realloc_hook;
+	ret_ptr = realloc(ptr, size);
+	__realloc_hook = fi_ibv_domain_realloc_hook;
+
+	HASH_FIND(hh, global_domain->mem_ptrs_hash, &ptr, sizeof(void *), entry);
+	if (!entry)
+		goto out;
+
+#if ENABLE_DEBUG
+	__realloc_hook = global_domain->prev_realloc_hook;
+	VERBS_DBG(FI_LOG_MR, "Catch realloc for %p, entry - %p\n", ptr, entry);
+	__realloc_hook = fi_ibv_domain_realloc_hook;
+#endif
+
+	dlist_insert_tail(&entry->entry,
+			  &global_domain->event_list);
+out:
+	return ret_ptr;
+}
+#endif
+
+static void fi_ibv_domain_mem_notifier_finalize(struct fi_ibv_domain *domain)
+{
+#ifdef HAVE_GLIBC_MALLOC_HOOKS
+	assert(global_domain);
+	util_buf_pool_destroy(domain->mem_ptrs_ent_pool);
+	__free_hook = domain->prev_free_hook;
+	__realloc_hook = domain->prev_realloc_hook;
+	domain->prev_free_hook = NULL;
+	domain->prev_realloc_hook = NULL;
+	global_domain = NULL;
+#endif
+}
+
+static int fi_ibv_domain_mem_notifier_init(struct fi_ibv_domain *domain)
+{
+#ifdef HAVE_GLIBC_MALLOC_HOOKS
+	assert(!global_domain);
+	global_domain = domain;
+	domain->mem_ptrs_ent_pool = util_buf_pool_create(
+					sizeof(struct fi_ibv_mem_ptr_entry),
+					FI_IBV_MEM_ALIGNMENT, 0,
+					fi_ibv_gl_data.mr_cache_size);
+	if (!domain->mem_ptrs_ent_pool)
+		return -FI_ENOMEM;
+
+	dlist_init(&domain->event_list);
+
+	domain->prev_free_hook = __free_hook;
+	domain->prev_realloc_hook = __realloc_hook;
+
+	__free_hook = fi_ibv_domain_free_hook;
+	__realloc_hook = fi_ibv_domain_realloc_hook;
+
+	return FI_SUCCESS;
+#else
+	return -FI_ENOSYS;
+#endif
+}
+
 static int fi_ibv_domain_close(fid_t fid)
 {
 	struct fi_ibv_domain *domain;
@@ -147,8 +243,11 @@ static int fi_ibv_domain_close(fid_t fid)
 		return -FI_EINVAL;
 	}
 
-	if (fi_ibv_gl_data.mr_cache_enable)
+	if (fi_ibv_gl_data.mr_cache_enable) {
 		ofi_mr_cache_cleanup(&domain->cache);
+		ofi_monitor_cleanup(&domain->monitor);
+		fi_ibv_domain_mem_notifier_finalize(domain);
+	}
 
 	if (domain->pd) {
 		ret = ibv_dealloc_pd(domain->pd);
@@ -327,6 +426,7 @@ fi_ibv_domain(struct fid_fabric *fabric, struct fi_info *info,
 	fi_ibv_domain_process_exp(_domain);
 
 	if (fi_ibv_gl_data.mr_cache_enable) {
+		(void) fi_ibv_domain_mem_notifier_init(_domain);
 		_domain->monitor.subscribe = fi_ibv_monitor_subscribe;
 		_domain->monitor.unsubscribe = fi_ibv_monitor_unsubscribe;
 		_domain->monitor.get_event = fi_ibv_monitor_get_event;
