@@ -678,6 +678,14 @@ fi_ibv_rdm_process_event_rejected(const struct rdma_cm_event *event,
 
 	if (ep->is_closing) {
 		conn->state = FI_VERBS_CONN_CLOSED;
+		rdma_destroy_qp(event->id);
+
+		if (rdma_destroy_id(event->id)) {
+			VERBS_INFO_ERRNO(FI_LOG_AV, "rdma_destroy_id failed\n",
+					 errno);
+			if (ret == FI_SUCCESS)
+				ret = -errno;
+		}
 	} else if ((pdata && *pdata == 0xdeadbeef) ||
 		/*
 		 * TODO: this is a workaround of the case when private_data is not
