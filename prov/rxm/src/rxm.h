@@ -270,15 +270,14 @@ DECLARE_FREESTACK(struct rxm_tx_entry, rxm_txe_fs);
 
 struct rxm_recv_entry {
 	struct dlist_entry entry;
-	struct iovec iov[RXM_IOV_LIMIT];
-	void *desc[RXM_IOV_LIMIT];
-	uint8_t count;
+	struct rxm_iov rxm_iov;
 	fi_addr_t addr;
 	void *context;
 	uint64_t flags;
 	uint64_t tag;
 	uint64_t ignore;
 	uint64_t comp_flags;
+	size_t total_len;
 };
 DECLARE_FREESTACK(struct rxm_recv_entry, rxm_recv_fs);
 
@@ -321,15 +320,16 @@ struct rxm_ep {
 	size_t 			comp_per_progress;
 	int			msg_mr_local;
 	int			rxm_mr_local;
+	size_t			min_multi_recv_size;
 
 	struct rxm_buf_pool	buf_pools[RXM_BUF_POOL_MAX_VAL];
 	
 	struct dlist_entry	post_rx_list;
 	struct dlist_entry	repost_ready_list;
 
-	struct rxm_send_queue 	send_queue;
-	struct rxm_recv_queue 	recv_queue;
-	struct rxm_recv_queue 	trecv_queue;
+	struct rxm_send_queue	send_queue;
+	struct rxm_recv_queue	recv_queue;
+	struct rxm_recv_queue	trecv_queue;
 };
 
 extern struct fi_provider rxm_prov;
@@ -379,6 +379,32 @@ int rxm_ep_prepost_buf(struct rxm_ep *rxm_ep, struct fid_ep *msg_ep);
 int rxm_ep_msg_mr_regv(struct rxm_ep *rxm_ep, const struct iovec *iov,
 		       size_t count, uint64_t access, struct fid_mr **mr);
 void rxm_ep_msg_mr_closev(struct fid_mr **mr, size_t count);
+
+/* Caller must hold recv_queue->lock */
+static inline struct rxm_rx_buf *
+rxm_check_unexp_msg_list(struct rxm_recv_queue *recv_queue, fi_addr_t addr,
+			 uint64_t tag, uint64_t ignore)
+{
+	struct rxm_recv_match_attr match_attr;
+	struct dlist_entry *entry;
+
+	if (dlist_empty(&recv_queue->unexp_msg_list))
+		return NULL;
+
+	match_attr.addr 	= addr;
+	match_attr.tag 		= tag;
+	match_attr.ignore 	= ignore;
+
+	entry = dlist_find_first_match(&recv_queue->unexp_msg_list,
+				       recv_queue->match_unexp, &match_attr);
+	if (!entry)
+		return NULL;
+
+	RXM_DBG_ADDR_TAG(FI_LOG_EP_DATA, "Match for posted recv found in unexp"
+			 " msg list\n", match_attr.addr, match_attr.tag);
+
+	return container_of(entry, struct rxm_rx_buf, unexp_msg.entry);
+}
 
 static inline
 struct rxm_buf *rxm_buf_get(struct rxm_buf_pool *pool)
@@ -452,8 +478,8 @@ rxm_rx_buf_release(struct rxm_ep *rxm_ep, struct rxm_rx_buf *rx_buf)
 		fastlock_release(&queue->lock);		\
 	} while (0)
 
-#define rxm_tx_entry_cleanup(entry)	(entry)->tx_buf = NULL
-#define rxm_recv_entry_cleanup(entry)
+#define rxm_tx_entry_cleanup(entry)		(entry)->tx_buf = NULL
+#define rxm_recv_entry_cleanup(entry)		(entry)->total_len = 0
 
 #define RXM_DEFINE_QUEUE_ENTRY(type, queue_type)				\
 static inline struct rxm_ ## type ## _entry *					\
