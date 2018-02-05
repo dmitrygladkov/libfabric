@@ -302,7 +302,7 @@ static inline int fi_ibv_poll_outstanding_cq(struct fi_ibv_msg_ep *ep,
 			    (wc.status != IBV_WC_WR_FLUSH_ERR)) {
 				ret = fi_ibv_wc_2_wce(cq, &wc, &wce);
 				if (ret) {
-					wre->ep = NULL;
+					wre->srq = NULL;
 					ret = -FI_EAGAIN;
 					goto fn;
 				}
@@ -344,7 +344,7 @@ void fi_ibv_empty_wre_list(struct util_buf_pool *wre_pool,
 
 	dlist_foreach_container_safe(wre_list, struct fi_ibv_wre,
 				     wre, entry, tmp) {
-		if (wre->wr.type == wre_type) {
+		if (wre->wr_type == wre_type) {
 			dlist_remove(&wre->entry);
 			wre->ep = NULL;
 			wre->srq = NULL;
