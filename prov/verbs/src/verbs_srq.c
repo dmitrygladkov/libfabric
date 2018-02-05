@@ -112,11 +112,12 @@ fi_ibv_srq_ep_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg, uint64_t 
 	dlist_insert_tail(&wre->entry, &ep->wre_list);
 	fastlock_release(&ep->wre_lock);
 
+	((struct fi_context *)msg->context)->internal[0] = wre;
 	wre->srq = ep;
-	wre->context = msg->context;
 	wre->wr_type = IBV_RECV_WR;
+	wre->num_wrs = 1;
 
-	wr.wr_id = (uintptr_t)wre;
+	wr.wr_id = (uintptr_t)msg->context;
 	sge = alloca(sizeof(*sge) * msg->iov_count);
 	for (i = 0; i < msg->iov_count; i++) {
 		sge[i].addr = (uintptr_t)msg->msg_iov[i].iov_base;

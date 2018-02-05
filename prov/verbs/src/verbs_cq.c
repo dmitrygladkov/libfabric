@@ -270,14 +270,10 @@ static inline int fi_ibv_wc_2_wce(struct fi_ibv_cq *cq,
 				  struct fi_ibv_wce **wce)
 
 {
-	struct fi_ibv_wre *wre =
-		(struct fi_ibv_wre *)(uintptr_t)wc->wr_id;
-
 	*wce = util_buf_alloc(cq->wce_pool);
 	if (!*wce)
 		return -FI_ENOMEM;
 	memset(*wce, 0, sizeof(**wce));
-	wc->wr_id = (uintptr_t)wre->context;
 	(*wce)->wc = *wc;
 
 	return FI_SUCCESS;
@@ -300,34 +296,43 @@ static inline int fi_ibv_poll_outstanding_cq(struct fi_ibv_msg_ep *ep,
 	if ((wc.opcode == IBV_WC_RECV) ||
 	    (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) ||
 	    ((wc.wr_id & cq->wr_id_mask) != cq->send_signal_wr_id)) {
-		wre = (struct fi_ibv_wre *)(uintptr_t)wc.wr_id;
+		wre = ((struct fi_context *)(uintptr_t)wc.wr_id)->internal[0];
 		if (wre->ep) {
 			wre_pool = wre->ep->wre_pool;
 			if ((wre->ep != ep) &&
 			    (wc.status != IBV_WC_WR_FLUSH_ERR)) {
 				ret = fi_ibv_wc_2_wce(cq, &wc, &wce);
 				if (ret) {
-					wre->srq = NULL;
+					if (--wre->num_wrs)
+						return -FI_EAGAIN;
+					wre->ep = NULL;
 					ret = -FI_EAGAIN;
 					goto fn;
 				}
 				slist_insert_tail(&wce->entry, &cq->wcq);
 			}
+			if (--wre->num_wrs)
+				return ret;
 			wre->ep = NULL;
 		} else {
 			/* WRE belongs to SRQ's wre pool and should be
 			 * handled or rejected if status == `IBV_WC_WR_FLUSH_ERR` */
 			assert(wre->srq);
 			wre_pool = wre->srq->wre_pool;
-			wre->srq = NULL;
 			if (wc.status != IBV_WC_WR_FLUSH_ERR) {
 				ret = fi_ibv_wc_2_wce(cq, &wc, &wce);
 				if (ret) {
+					if (--wre->num_wrs)
+						return -FI_EAGAIN;
+					wre->srq = NULL;
 					ret = -FI_EAGAIN;
 					goto fn;
 				}
 				slist_insert_tail(&wce->entry, &cq->wcq);
 			}
+			wre->srq = NULL;
+			if (--wre->num_wrs)
+				return ret;
 		}
 fn:
 		dlist_remove(&wre->entry);
@@ -403,15 +408,17 @@ ssize_t fi_ibv_poll_cq(struct fi_ibv_cq *cq, struct ibv_wc *wc)
 	if ((wc->opcode == IBV_WC_RECV) ||
 	    (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM) ||
 	    ((wc->wr_id & cq->wr_id_mask) != cq->send_signal_wr_id)) {
-		wre = (struct fi_ibv_wre *)(uintptr_t)wc->wr_id;
+		wre = ((struct fi_context *)(uintptr_t)wc->wr_id)->internal[0];
 		assert(wre && (wre->ep || wre->srq));
-		wc->wr_id = (uintptr_t)wre->context;
 
 		if (wc->status == IBV_WC_WR_FLUSH_ERR)
 			/* Handles case where remote side destroys
 			 * the connection, but local side isn't aware
 			 * about that yet */
 			ret = 0;
+
+		if (--wre->num_wrs)
+			return ret;
 
 		if (wre->ep) {
 			wre_pool = wre->ep->wre_pool;

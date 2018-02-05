@@ -396,10 +396,10 @@ enum fi_ibv_wre_type {
 
 struct fi_ibv_wre {
 	struct dlist_entry      entry;
-	void			*context;
 	struct fi_ibv_msg_ep	*ep;
 	struct fi_ibv_srq_ep	*srq;
 	enum fi_ibv_wre_type	wr_type;
+	size_t			num_wrs;
 };
 
 struct fi_ibv_cq {

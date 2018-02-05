@@ -50,6 +50,7 @@
 			FI_REMOTE_WRITE)
 #define VERBS_DGRAM_CAPS (FI_MSG | FI_RECV | FI_SEND)
 
+#define VERBS_MSG_MODE (FI_CONTEXT)
 #define VERBS_RDM_MODE (FI_CONTEXT)
 
 #define VERBS_TX_OP_FLAGS (FI_INJECT | FI_COMPLETION | FI_TRANSMIT_COMPLETE)
@@ -607,7 +608,13 @@ static int fi_ibv_alloc_info(struct ibv_context *ctx, struct fi_info **info,
 		fi->mode	= VERBS_RDM_MODE;
 		*(fi->tx_attr)	= verbs_rdm_tx_attr;
 		*(fi->rx_attr)	= verbs_rdm_rx_attr;
-	} else {
+	} else if (ep_dom->type == FI_EP_MSG) {
+		fi->mode	= VERBS_MSG_MODE;
+		*(fi->tx_attr)	= verbs_rdm_tx_attr;
+		fi->tx_attr->mode |= VERBS_MSG_MODE;
+		*(fi->rx_attr)	= verbs_rdm_rx_attr;
+		fi->rx_attr->mode |= VERBS_MSG_MODE;
+	} else /* FI_EP_DGRAM */ {
 		*(fi->tx_attr)	= verbs_tx_attr;
 		*(fi->rx_attr)	= verbs_rx_attr;
 	}

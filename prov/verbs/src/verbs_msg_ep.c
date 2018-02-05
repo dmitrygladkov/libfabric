@@ -563,10 +563,11 @@ fi_ibv_prepare_signal_send(struct fi_ibv_msg_ep *ep, struct ibv_send_wr *wr,
 	dlist_insert_tail(&(*wre)->entry, &ep->wre_list);
 	fastlock_release(&ep->wre_lock);
 
-	(*wre)->context = context;
+	((struct fi_context *)context)->internal[0] = *wre;
 	(*wre)->ep = ep;
 	(*wre)->wr_type = IBV_SEND_WR;
-	wr->wr_id = (uintptr_t)*wre;
+	(*wre)->num_wrs = 1;
+	wr->wr_id = (uintptr_t)context;
 
 	assert((wr->wr_id & ep->scq->wr_id_mask) != ep->scq->send_signal_wr_id);
 	ofi_atomic_set32(&ep->unsignaled_send_cnt, 0);
@@ -713,11 +714,12 @@ fi_ibv_msg_ep_recvmsg(struct fid_ep *ep_fid, const struct fi_msg *msg, uint64_t 
 	dlist_insert_tail(&wre->entry, &ep->wre_list);
 	fastlock_release(&ep->wre_lock);
 
+	((struct fi_context *)msg->context)->internal[0] = wre;
 	wre->ep = ep;
-	wre->context = msg->context;
 	wre->wr_type = IBV_RECV_WR;
+	wre->num_wrs = 1;
 
-	wr.wr_id = (uintptr_t)wre;
+	wr.wr_id = (uintptr_t)msg->context;
 	sge = alloca(sizeof(*sge) * msg->iov_count);
 	for (i = 0; i < msg->iov_count; i++) {
 		sge[i].addr = (uintptr_t)msg->msg_iov[i].iov_base;
