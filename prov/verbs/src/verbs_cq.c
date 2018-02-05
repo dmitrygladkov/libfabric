@@ -36,39 +36,46 @@
 
 #include "fi_verbs.h"
 
-static uint64_t fi_ibv_comp_flags(struct ibv_wc *wc)
+static inline uint64_t fi_ibv_handle_imm_data(struct ibv_wc *wc, uint64_t *data)
 {
-	uint64_t flags = 0;
+	if (wc->wc_flags & IBV_WC_WITH_IMM) {
+		if (data)
+			*data = ntohl(wc->imm_data);
+		return FI_REMOTE_CQ_DATA;
+	} else {
+		if (data)
+			*data = 0;
+		return 0;
+	}
+}
 
-	if (wc->wc_flags & IBV_WC_WITH_IMM)
-		flags |= FI_REMOTE_CQ_DATA;
-
+static inline uint64_t fi_ibv_comp_flags(struct ibv_wc *wc, size_t *len)
+{
 	switch (wc->opcode) {
 	case IBV_WC_SEND:
-		flags |= FI_SEND | FI_MSG;
-		break;
+		*len = 0;
+		return (FI_SEND | FI_MSG);
 	case IBV_WC_RDMA_WRITE:
-		flags |= FI_RMA | FI_WRITE;
-		break;
+		*len = 0;
+		return (FI_RMA | FI_WRITE);
 	case IBV_WC_RDMA_READ:
-		flags |= FI_RMA | FI_READ;
-		break;
+		*len = 0;
+		return (FI_RMA | FI_READ);
 	case IBV_WC_COMP_SWAP:
-		flags |= FI_ATOMIC;
-		break;
+		*len = 0;
+		return FI_ATOMIC;
 	case IBV_WC_FETCH_ADD:
-		flags |= FI_ATOMIC;
-		break;
+		*len = 0;
+		return FI_ATOMIC;
 	case IBV_WC_RECV:
-		flags |= FI_RECV | FI_MSG;
-		break;
+		*len = wc->byte_len;
+		return (FI_RECV | FI_MSG);
 	case IBV_WC_RECV_RDMA_WITH_IMM:
-		flags |= FI_RMA | FI_REMOTE_WRITE;
-		break;
+		*len = wc->byte_len;
+		return (FI_RMA | FI_REMOTE_WRITE);
 	default:
-		break;
+		return 0;
 	}
-	return flags;
 }
 
 static ssize_t
@@ -98,7 +105,8 @@ fi_ibv_cq_readerr(struct fid_cq *cq_fid, struct fi_cq_err_entry *entry,
 	wce = container_of(slist_entry, struct fi_ibv_wce, entry);
 
 	entry->op_context = (void *)(uintptr_t)wce->wc.wr_id;
-	entry->flags = fi_ibv_comp_flags(&wce->wc);
+	entry->flags = fi_ibv_comp_flags(&wce->wc, &entry->len) |
+		       fi_ibv_handle_imm_data(&wce->wc, &entry->data);
 	entry->err = EIO;
 	entry->prov_errno = wce->wc.status;
 
@@ -212,8 +220,8 @@ static void fi_ibv_cq_read_msg_entry(struct ibv_wc *wc, int i, void *buf)
 	struct fi_cq_msg_entry *entry = buf;
 
 	entry[i].op_context = (void *)(uintptr_t)wc->wr_id;
-	entry[i].flags = fi_ibv_comp_flags(wc);
-	entry[i].len = (uint64_t) wc->byte_len;
+	entry[i].flags = fi_ibv_comp_flags(wc, &entry[i].len) |
+			fi_ibv_handle_imm_data(wc, NULL);
 }
 
 static void fi_ibv_cq_read_data_entry(struct ibv_wc *wc, int i, void *buf)
@@ -221,11 +229,8 @@ static void fi_ibv_cq_read_data_entry(struct ibv_wc *wc, int i, void *buf)
 	struct fi_cq_data_entry *entry = buf;
 
 	entry[i].op_context = (void *)(uintptr_t)wc->wr_id;
-	entry[i].flags = fi_ibv_comp_flags(wc);
-	entry[i].len = (wc->opcode & (IBV_WC_RECV | IBV_WC_RECV_RDMA_WITH_IMM)) ?
-		wc->byte_len : 0;
-	entry[i].data = (wc->wc_flags & IBV_WC_WITH_IMM) ?
-		ntohl(wc->imm_data) : 0;
+	entry[i].flags = fi_ibv_comp_flags(wc, &entry[i].len) |
+			 fi_ibv_handle_imm_data(wc, &entry[i].data);
 }
 
 static int fi_ibv_match_ep_id(struct slist_entry *entry,
