@@ -185,6 +185,7 @@ extern struct fi_ibv_gl_data {
 	char	*iface;
 	int	mr_cache_enable;
 	int	mr_max_cached_cnt;
+	long	mr_max_cached_size;
 
 	struct {
 		int	buffer_num;
