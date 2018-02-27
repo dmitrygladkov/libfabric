@@ -268,6 +268,10 @@ static int fi_ibv_param_define(const char *param_name, const char *param_str,
 			snprintf(param_default_str, 256, "%d", *((int *)param_default));
 			param_default_sz = strlen(param_default_str);
 			break;
+		case FI_PARAM_LONG:
+			snprintf(param_default_str, 256, "%ld", *((long *)param_default));
+			param_default_sz = strlen(param_default_str);
+			break;
 		default:
 			assert(0);
 			ret = -FI_EINVAL;
@@ -461,6 +465,25 @@ static int fi_ibv_get_param_bool(const char *param_name,
 		if ((*param_default != 1) && (*param_default != 0))
 			return -FI_EINVAL;
 	}
+
+	return 0;
+}
+
+static int fi_ibv_get_param_long(const char *param_name,
+				 const char *param_str,
+				 long *param_default)
+{
+	int ret;
+	long param;
+
+	ret = fi_ibv_param_define(param_name, param_str,
+				  FI_PARAM_LONG,
+				  param_default);
+	if (ret)
+		return ret;
+
+	if (!fi_param_get_long(&fi_ibv_prov, param_name, &param))
+		*param_default = param;
 
 	return 0;
 }
