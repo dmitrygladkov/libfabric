@@ -741,10 +741,6 @@ rxm_ep_format_tx_res_lightweight(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_con
 		return -FI_EAGAIN;
 	}
 
-	assert((((*tx_buf)->pkt.ctrl_hdr.type == ofi_ctrl_data) &&
-		 (len <= rxm_ep->rxm_info->tx_attr->inject_size)) ||
-	       ((*tx_buf)->pkt.ctrl_hdr.type == ofi_ctrl_large_data));
-
 	(*tx_buf)->pkt.ctrl_hdr.conn_id = rxm_conn->handle.remote_key;
 
 	(*tx_buf)->pkt.hdr.size = len;
@@ -889,6 +885,95 @@ err:
 	rxm_tx_buf_release(rxm_ep, tx_entry->tx_buf);
 	rxm_tx_entry_release(&rxm_ep->send_queue, tx_entry);
 	return ret;
+}
+
+static inline struct rxm_tx_buf *
+rxm_ep_seq_tx_prepare_send_seg(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
+			       size_t total_len, size_t seg_num, size_t seg_len,
+			       uint64_t data, uint64_t flags, uint64_t tag,
+			       struct rxm_tx_entry *tx_entry, struct rxm_buf_pool *pool)
+{
+	struct rxm_tx_buf *tx_buf;
+	ssize_t ret;
+
+	ret = rxm_ep_format_tx_res_lightweight(rxm_ep, rxm_conn, total_len, data,
+					       flags, tag, &tx_buf, pool);
+	if (OFI_UNLIKELY(ret))
+		return NULL;
+
+	tx_buf->pkt.ctrl_hdr.msg_id = tx_entry->msg_id;
+	tx_buf->pkt.ctrl_hdr.seg_no = seg_num;
+	tx_buf->pkt.ctrl_hdr.seg_size = seg_len;
+	tx_entry->save_type = tx_buf->pkt.ctrl_hdr.type;
+	tx_buf->pkt.ctrl_hdr.type = ofi_ctrl_seq_data;
+
+	ofi_copy_from_iov(tx_buf->pkt.data, seg_len,
+			  tx_entry->rxm_iov.iov, tx_entry->rxm_iov.count,
+			  tx_entry->iov_offset);
+	tx_entry->iov_offset += seg_len;
+
+	dlist_init(&tx_buf->in_flight_entry);
+	dlist_insert_tail(&tx_buf->in_flight_entry, &tx_entry->in_flight_tx_buf_list);
+
+	return tx_buf;
+}
+
+static inline ssize_t
+rxm_ep_seq_tx_send_seq(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
+		       struct rxm_tx_entry *tx_entry, struct rxm_tx_buf *tx_buf)
+{
+	return fi_send(rxm_conn->msg_ep, &tx_buf->pkt, rxm_pkt_size +
+		       tx_buf->pkt.ctrl_hdr.seg_size, tx_buf->hdr.desc,
+		       0, tx_entry);
+}
+
+static inline ssize_t
+rxm_ep_seq_tx_send(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
+		   void *context, uint8_t count, const struct iovec *iov,
+		   size_t data_len, uint64_t data, uint64_t flags,
+		   uint64_t tag, uint64_t comp_flags,
+		   struct rxm_buf_pool *pool)
+{
+	struct rxm_tx_entry *tx_entry;
+	size_t seg_num = data_len / rxm_ep->rxm_info->tx_attr->inject_size +
+		((data_len % rxm_ep->rxm_info->tx_attr->inject_size) ? 1 : 0);
+	size_t i, total_len = data_len;
+	ssize_t ret;
+
+	ret = rxm_ep_format_tx_entry(rxm_ep, context, count, flags,
+				     comp_flags, NULL, &tx_entry);
+	if (OFI_UNLIKELY(ret))
+		return ret;
+
+	RXM_LOG_STATE(FI_LOG_EP_DATA, tx_entry->tx_buf->pkt,
+		      RXM_TX, RXM_SEQ_TX);
+	tx_entry->state = RXM_SEQ_TX;
+	dlist_init(&tx_entry->in_flight_tx_buf_list);
+	tx_entry->iov_offset = 0;
+	for (i = 0; i < count; i++)
+		tx_entry->rxm_iov.iov[i] = iov[i];
+	tx_entry->rxm_iov.count = count;
+	tx_entry->seg_num = seg_num;
+	tx_entry->msg_id = rxm_txe_fs_index(rxm_ep->send_queue.fs,
+					    tx_entry);
+
+	while (total_len) {
+		size_t seg_len = ((seg_num > 1) ?
+				  rxm_ep->rxm_info->tx_attr->inject_size :
+				  total_len);
+		struct rxm_tx_buf *tx_buf =
+			rxm_ep_seq_tx_prepare_send_seg(rxm_ep, rxm_conn, data_len,
+						       seg_num - 1, seg_len, data, flags,
+						       tag, tx_entry, pool);
+		if (OFI_UNLIKELY(!tx_buf))
+			return -FI_EAGAIN;
+		ret = rxm_ep_seq_tx_send_seq(rxm_ep, rxm_conn, tx_entry, tx_buf);
+		if (OFI_UNLIKELY(ret))
+			return ret;
+		seg_num--;
+		total_len -= seg_len;
+	}
+	return FI_SUCCESS;
 }
 
 static inline ssize_t
@@ -1096,20 +1181,7 @@ cmap_err:
 
 	assert(dlist_empty(&rxm_conn->postponed_tx_list));
 
-	if (data_len > rxm_ep->rxm_info->tx_attr->inject_size) {
-		if (OFI_UNLIKELY(flags & FI_INJECT)) {
-			FI_WARN(&rxm_prov, FI_LOG_EP_DATA,
-				"inject size supported: %zu, msg size: %zu\n",
-				rxm_tx_attr.inject_size, data_len);
-			return -FI_EMSGSIZE;
-		}
-		ret = rxm_ep_alloc_lmt_tx_res(rxm_ep, rxm_conn, context, (uint8_t)count,
-					      iov, desc, data_len, data, flags, tag,
-					      comp_flags, op, &tx_entry);
-		if (OFI_UNLIKELY(ret < 0))
-			return ret;			
-		return rxm_ep_lmt_tx_send(rxm_ep, rxm_conn, tx_entry, rxm_pkt_size + ret);
-	} else {
+	if (data_len <= rxm_ep->rxm_info->tx_attr->inject_size) {
 		size_t total_len = rxm_pkt_size + data_len;
 
 		ret = rxm_ep_format_tx_res_lightweight(rxm_ep, rxm_conn, data_len, data,
@@ -1131,6 +1203,28 @@ cmap_err:
 		}
 		tx_entry->state = RXM_TX;
 		return rxm_ep_normal_send(rxm_ep, rxm_conn, tx_entry, total_len);
+	} else if (data_len < 100000) {
+		if (OFI_UNLIKELY(flags & FI_INJECT)) {
+			FI_WARN(&rxm_prov, FI_LOG_EP_DATA,
+				"inject size supported: %zu, msg size: %zu\n",
+				rxm_tx_attr.inject_size, data_len);
+			return -FI_EMSGSIZE;
+		}
+		return rxm_ep_seq_tx_send(rxm_ep, rxm_conn, context, count, iov,
+					  data_len, data, flags, tag, comp_flags, pool);
+	} else {
+		if (OFI_UNLIKELY(flags & FI_INJECT)) {
+			FI_WARN(&rxm_prov, FI_LOG_EP_DATA,
+				"inject size supported: %zu, msg size: %zu\n",
+				rxm_tx_attr.inject_size, data_len);
+			return -FI_EMSGSIZE;
+		}
+		ret = rxm_ep_alloc_lmt_tx_res(rxm_ep, rxm_conn, context, (uint8_t)count,
+					      iov, desc, data_len, data, flags, tag,
+					      comp_flags, op, &tx_entry);
+		if (OFI_UNLIKELY(ret < 0))
+			return ret;			
+		return rxm_ep_lmt_tx_send(rxm_ep, rxm_conn, tx_entry, rxm_pkt_size + ret);
 	}
 }
 

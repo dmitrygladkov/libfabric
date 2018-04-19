@@ -155,16 +155,17 @@ struct rxm_rma_iov {
  */
 
 /* RXM protocol states / tx/rx context */
-#define RXM_PROTO_STATES(FUNC)	\
-	FUNC(RXM_TX_NOBUF),	\
-	FUNC(RXM_TX),		\
-	FUNC(RXM_TX_RMA),	\
-	FUNC(RXM_RX),		\
-	FUNC(RXM_LMT_TX),	\
-	FUNC(RXM_LMT_ACK_WAIT),	\
-	FUNC(RXM_LMT_READ),	\
-	FUNC(RXM_LMT_ACK_SENT), \
-	FUNC(RXM_LMT_ACK_RECVD),\
+#define RXM_PROTO_STATES(FUNC)		\
+	FUNC(RXM_TX_NOBUF),		\
+	FUNC(RXM_TX),			\
+	FUNC(RXM_TX_RMA),		\
+	FUNC(RXM_RX),			\
+	FUNC(RXM_SEQ_TX),		\
+	FUNC(RXM_LMT_TX),		\
+	FUNC(RXM_LMT_ACK_WAIT),		\
+	FUNC(RXM_LMT_READ),		\
+	FUNC(RXM_LMT_ACK_SENT),		\
+	FUNC(RXM_LMT_ACK_RECVD),	\
 	FUNC(RXM_LMT_FINISH),
 
 enum rxm_proto_state {
@@ -256,6 +257,9 @@ struct rxm_tx_buf {
 
 	enum rxm_buf_pool_type type;
 
+	/* Used for sequentila transfer of data */
+	struct dlist_entry in_flight_entry;
+
 	/* Must stay at bottom */
 	struct rxm_pkt pkt;
 };
@@ -294,6 +298,14 @@ struct rxm_tx_entry {
 	/* Used for large messages and RMA */
 	struct fid_mr *mr[RXM_IOV_LIMIT];
 	struct rxm_rx_buf *rx_buf;
+
+	/* Used for sequential transfer of data */
+	size_t seg_num;
+	uint64_t msg_id;
+	uint8_t save_type;
+	struct dlist_entry in_flight_tx_buf_list;
+	struct rxm_iov rxm_iov;
+	uint64_t iov_offset;
 };
 DECLARE_FREESTACK(struct rxm_tx_entry, rxm_txe_fs);
 
@@ -308,6 +320,10 @@ struct rxm_recv_entry {
 	uint64_t comp_flags;
 	size_t total_len;
 	void *multi_recv_buf;
+	/* Used for sequetila receive of data */
+	size_t total_recv_len;
+	uint64_t msg_id;
+	size_t last_recv_seg_num;
 };
 DECLARE_FREESTACK(struct rxm_recv_entry, rxm_recv_fs);
 
