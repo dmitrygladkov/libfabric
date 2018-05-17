@@ -1769,6 +1769,7 @@ static int rxm_ep_msg_res_open(struct util_domain *util_domain,
 	dlist_init(&rxm_ep->msg_cq_fd_ref_list);
 
 	if (rxm_ep->msg_info->ep_attr->rx_ctx_cnt == FI_SHARED_CONTEXT) {
+	 	int i;
 		ret = fi_srx_context(rxm_domain->msg_domain, rxm_ep->msg_info->rx_attr,
 				     &rxm_ep->srx_ctx, NULL);
 		if (ret) {
@@ -1776,6 +1777,38 @@ static int rxm_ep_msg_res_open(struct util_domain *util_domain,
 				"Unable to open shared receive context\n");
 			goto err1;
 		}
+
+		ret = fi_open_ops(&rxm_ep->srx_ctx->fid, FI_VERBS_EP_OPS_1, 0,
+				  (void **)&rxm_ep->verbs_ep_ops, &rxm_ep->srx_ctx);
+		if (ret) {
+			FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
+				"Unable to open ops\n");
+			goto err2;
+		}
+		ret = rxm_ep->verbs_ep_ops->get_val(
+			rxm_ep->srx_ctx, FI_VERBS_EP_OPS_SRQ_RECV_WR_SIZE,
+			&rxm_ep->native_rx_size);
+		if (ret) {
+			FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
+				"Unable to get value of SRQ RECV WR SIZE\n");
+			goto err2;
+		}
+		ret = rxm_ep->verbs_ep_ops->get_val(
+			rxm_ep->srx_ctx, FI_VERBS_EP_OPS_SGE_SIZE,
+			&rxm_ep->native_rx_sge_size);
+		if (ret) {
+			FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
+				"Unable to get value of SGE SIZE\n");
+			goto err2;
+		}
+		fastlock_init(&rxm_ep->native_rx_lock);
+		rxm_ep->native_rx = calloc(1, 8 * sizeof(void *));
+		rxm_ep->native_rx_sge = calloc(1, 8 * sizeof(void *));
+		for (i = 0; i < 8; i++) {
+			rxm_ep->native_rx[i] = calloc(1, rxm_ep->native_rx_size);
+			rxm_ep->native_rx_sge[i] = calloc(1, rxm_ep->native_rx_sge_size);
+		}
+		rxm_ep->native_rx_rem_space_cnt = 8;
 	}
 
 	ret = rxm_listener_open(rxm_ep);

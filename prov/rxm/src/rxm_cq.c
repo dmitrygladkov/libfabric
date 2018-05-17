@@ -184,7 +184,33 @@ static int rxm_finish_recv(struct rxm_rx_buf *rx_buf, size_t done_len)
 			rxm_cntr_inc(rx_buf->ep->util_ep.rx_cntr);
 	}
 
-	dlist_insert_tail(&rx_buf->repost_entry, &rx_buf->ep->repost_ready_list);
+	rx_buf->ep->res_fastlock_acquire(&rx_buf->ep->native_rx_lock);
+	if (rx_buf->ep->native_rx_rem_space_cnt == 8) {
+	    rx_buf->ep->verbs_ep_ops->alloc_native_srq_recv(NULL,
+					      rx_buf->ep->native_rx[rx_buf->ep->native_rx_rem_space_cnt - 1],
+					      rx_buf->ep->native_rx_sge[rx_buf->ep->native_rx_rem_space_cnt - 1],
+					      &rx_buf->pkt, rx_buf->ep->rxm_info->tx_attr->inject_size +
+					      sizeof(struct rxm_pkt), rx_buf->hdr.desc, rx_buf, 0);
+	} else {
+		
+	    rx_buf->ep->verbs_ep_ops->alloc_native_srq_recv(rx_buf->ep->native_rx[rx_buf->ep->native_rx_rem_space_cnt],
+					      rx_buf->ep->native_rx[rx_buf->ep->native_rx_rem_space_cnt - 1],
+					      rx_buf->ep->native_rx_sge[rx_buf->ep->native_rx_rem_space_cnt - 1],
+					      &rx_buf->pkt, rx_buf->ep->rxm_info->tx_attr->inject_size +
+					      sizeof(struct rxm_pkt), rx_buf->hdr.desc, rx_buf, 0);
+	}
+	
+	//fprintf(stderr, "Alloc - %d \n", rx_buf->ep->native_rx_rem_space_cnt);
+	rx_buf->ep->native_rx_rem_space_cnt--;
+	if (rx_buf->ep->native_rx_rem_space_cnt == 0) {
+	   ret =  rx_buf->ep->verbs_ep_ops->native_post_srq_recv(rx_buf->ep->srx_ctx,
+					  rx_buf->ep->native_rx[7], 0);
+	   //fprintf(stderr, "res - %d \n", ret);
+	    rx_buf->ep->native_rx_rem_space_cnt = 8;
+	    //fprintf(stderr, "POST - %d \n", rx_buf->ep->native_rx_rem_space_cnt);
+	}
+	rx_buf->ep->res_fastlock_release(&rx_buf->ep->native_rx_lock);
+	//dlist_insert_tail(&rx_buf->repost_entry, &rx_buf->ep->repost_ready_list);
 	if (rx_buf->recv_entry->flags & FI_MULTI_RECV) {
 		struct rxm_iov rxm_iov;
 
@@ -797,7 +823,7 @@ void rxm_ep_progress_one(struct util_ep *util_ep)
 	struct fi_cq_data_entry comp;
 	ssize_t ret;
 
-	rxm_cq_repost_rx_buffers(rxm_ep);
+	//rxm_cq_repost_rx_buffers(rxm_ep);
 
 	if (OFI_UNLIKELY(rxm_ep->util_ep.cmap->av_updated)) {
 		ret = rxm_cq_reprocess_recv_queues(rxm_ep);
@@ -829,7 +855,7 @@ void rxm_ep_progress_multi(struct util_ep *util_ep)
 	ssize_t ret;
 	size_t comp_read = 0;
 
-	rxm_cq_repost_rx_buffers(rxm_ep);
+	//rxm_cq_repost_rx_buffers(rxm_ep);
 
 	if (OFI_UNLIKELY(rxm_ep->util_ep.cmap->av_updated)) {
 		ret = rxm_cq_reprocess_recv_queues(rxm_ep);

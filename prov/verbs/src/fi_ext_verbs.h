@@ -22,6 +22,7 @@ extern "C" {
 
 enum fi_verbs_ep_ops_val {
 	FI_VERBS_EP_OPS_SRQ_RECV_WR_SIZE = 0,
+	FI_VERBS_EP_OPS_SGE_SIZE = 1,
 };
 
 typedef int (*fi_verbs_get_val)(struct fid_ep *ep_fid, enum fi_verbs_ep_ops_val, void *val);

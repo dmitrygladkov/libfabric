@@ -1259,7 +1259,7 @@ static struct fi_ops fi_ibv_srq_ep_ops = {
 	.close = fi_ibv_srq_close,
 	.bind = fi_no_bind,
 	.control = fi_no_control,
-	.ops_open = fi_no_ops_open,
+	.ops_open = fi_ibv_ep_ops_open,
 };
 
 int fi_ibv_srq_context(struct fid_domain *domain, struct fi_rx_attr *attr,
@@ -1909,6 +1909,9 @@ fi_ibv_ep_ops_get_val(struct fid_ep *ep_fid, enum fi_verbs_ep_ops_val name, void
 	switch (name) {
 	case FI_VERBS_EP_OPS_SRQ_RECV_WR_SIZE:
 		*(size_t *)val = sizeof(struct ibv_recv_wr);
+		break;
+	case FI_VERBS_EP_OPS_SGE_SIZE:
+		*(size_t *)val = sizeof(struct ibv_sge);
 		break;
 	default:
 		VERBS_WARN(FI_LOG_EP_CTRL, ("Invalid fi_verbs_ep_ops_val\n"));

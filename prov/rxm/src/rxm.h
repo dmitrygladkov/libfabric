@@ -34,6 +34,10 @@
 #  include <config.h>
 #endif /* HAVE_CONFIG_H */
 
+#if HAVE_VERBS
+#include "prov/verbs/src/fi_ext_verbs.h"
+#endif /* HAVE_VERBS */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -395,6 +399,14 @@ struct rxm_ep {
 
 	struct dlist_entry	post_rx_list;
 	struct dlist_entry	repost_ready_list;
+
+	struct fi_verbs_ops_ep	*verbs_ep_ops;
+	fastlock_t		native_rx_lock;
+	size_t			native_rx_size;
+	size_t			native_rx_sge_size;
+	int			native_rx_rem_space_cnt;
+	void			**native_rx;
+	void			**native_rx_sge;
 
 	struct rxm_send_queue	send_queue;
 	struct rxm_recv_queue	recv_queue;
