@@ -32,6 +32,7 @@
 
 #include "config.h"
 
+#include "fi_ext_verbs.h"
 #include "fi_verbs.h"
 #include "verbs_dgram.h"
 
@@ -529,12 +530,41 @@ static int fi_ibv_dgram_ep_getname(fid_t ep_fid, void *addr, size_t *addrlen)
 	return FI_SUCCESS;
 }
 
+static int
+fi_ibv_ep_ops_get_val(struct fid_ep *fid, enum fi_verbs_ep_ops_val name, void *val);
+static void
+fi_ibv_ep_alloc_native_srq_recv(void *wr, void *new_wr, void *new_sge,
+				void *buf, size_t len, void *desc,
+				void *context, uint64_t flags);
+static ssize_t
+fi_ibv_ep_native_post_srq_recv(struct fid_ep *ep_fid, void *wr, uint64_t flags);
+
+static struct fi_verbs_ops_ep fi_ibv_ops_ep = {
+	.get_val = fi_ibv_ep_ops_get_val,
+	.alloc_native_srq_recv = fi_ibv_ep_alloc_native_srq_recv,
+	.native_post_srq_recv = fi_ibv_ep_native_post_srq_recv,
+};
+
+static int
+fi_ibv_ep_ops_open(struct fid *fid, const char *ops_name, uint64_t flags,
+		   void **ops, void *context)
+{
+	int ret = FI_SUCCESS;
+
+	if (!strcmp(ops_name, FI_VERBS_EP_OPS_1))
+		*ops = &fi_ibv_ops_ep;
+	else
+		ret = -FI_EINVAL;
+
+	return ret;
+}
+
 static struct fi_ops fi_ibv_ep_ops = {
 	.size = sizeof(struct fi_ops),
 	.close = fi_ibv_ep_close,
 	.bind = fi_ibv_ep_bind,
 	.control = fi_ibv_ep_control,
-	.ops_open = fi_no_ops_open,
+	.ops_open = fi_ibv_ep_ops_open,
 };
 
 static struct fi_ops_cm fi_ibv_dgram_cm_ops = {
@@ -1870,3 +1900,51 @@ struct fi_ops_atomic fi_ibv_msg_ep_atomic_ops = {
 	.readwritevalid	= fi_ibv_msg_ep_atomic_readwritevalid,
 	.compwritevalid = fi_ibv_msg_ep_atomic_compwritevalid
 };
+
+static int
+fi_ibv_ep_ops_get_val(struct fid_ep *ep_fid, enum fi_verbs_ep_ops_val name, void *val)
+{
+	assert(val);
+
+	switch (name) {
+	case FI_VERBS_EP_OPS_SRQ_RECV_WR_SIZE:
+		*(size_t *)val = sizeof(struct ibv_recv_wr);
+		break;
+	default:
+		VERBS_WARN(FI_LOG_EP_CTRL, ("Invalid fi_verbs_ep_ops_val\n"));
+		return -FI_EINVAL;
+	}
+
+	return FI_SUCCESS;
+}
+
+static void
+fi_ibv_ep_alloc_native_srq_recv(void *wr, void *new_wr, void *new_sge,
+				void *buf, size_t len, void *desc,
+				void *context, uint64_t flags)
+{
+	struct ibv_recv_wr *recv_wr = (struct ibv_recv_wr *)new_wr;
+	struct ibv_recv_wr *main_wr = (struct ibv_recv_wr *)wr;
+
+	recv_wr->wr_id = (uintptr_t)context;
+	recv_wr->num_sge = 1;
+	recv_wr->sg_list = (struct ibv_sge *)new_sge;
+	recv_wr->sg_list->addr = (uintptr_t)buf;
+	recv_wr->sg_list->length = (uint32_t)len;
+	recv_wr->sg_list->lkey = (uint32_t)(uintptr_t)desc;
+	recv_wr->next = NULL;
+
+	if (main_wr)
+		main_wr->next = recv_wr;
+}
+
+static ssize_t
+fi_ibv_ep_native_post_srq_recv(struct fid_ep *ep_fid, void *wr, uint64_t flags)
+{
+	struct fi_ibv_srq_ep *ep =
+		container_of(ep_fid, struct fi_ibv_srq_ep, ep_fid);
+	struct ibv_recv_wr *recv_wr = (struct ibv_recv_wr *)wr;
+	struct ibv_recv_wr *bad_wr;
+
+	return fi_ibv_handle_post(ibv_post_srq_recv(ep->srq, recv_wr, &bad_wr));
+}
