@@ -349,6 +349,36 @@ static int rxm_lmt_handle_ack(struct rxm_rx_buf *rx_buf)
 }
 
 static inline
+ssize_t rxm_cq_handle_seg_data(struct rxm_rx_buf *rx_buf)
+{
+	uint64_t done_len = ofi_copy_to_iov(rx_buf->recv_entry->rxm_iov.iov,
+					    rx_buf->recv_entry->rxm_iov.count,
+					    rx_buf->recv_entry->total_recv_len,
+					    rx_buf->pkt.data, rx_buf->pkt.ctrl_hdr.seg_size);
+	rx_buf->recv_entry->total_recv_len += done_len;
+	/* Check that this isn't last segment */
+	if ((rx_buf->pkt.ctrl_hdr.seg_no) &&
+	/* and message isn't truncated */
+	    (done_len == rx_buf->pkt.ctrl_hdr.seg_size)) {
+		if (rx_buf->recv_entry->msg_id == UINT64_MAX) {
+			rx_buf->conn = rxm_key2conn(rx_buf->ep,
+						    rx_buf->pkt.ctrl_hdr.conn_id);
+			rx_buf->recv_entry->msg_id = rx_buf->pkt.ctrl_hdr.msg_id;
+		}
+		/* The RX buffer can be reposted for further re-use */
+		rx_buf->recv_entry = NULL;
+		dlist_insert_tail(&rx_buf->repost_entry,
+				  &rx_buf->ep->repost_ready_list);
+		return FI_SUCCESS;
+	}
+	/* Mark rxm_recv_entry::msg_id as unknown for futher re-use */
+	rx_buf->recv_entry->msg_id = UINT64_MAX;
+	done_len = rx_buf->recv_entry->total_recv_len;
+	rx_buf->recv_entry->total_recv_len = 0;
+	return rxm_finish_recv(rx_buf, done_len);
+}
+
+static inline
 ssize_t rxm_cq_handle_large_data(struct rxm_rx_buf *rx_buf)
 {
 	size_t i;
@@ -405,11 +435,17 @@ ssize_t rxm_cq_handle_data(struct rxm_rx_buf *rx_buf)
 
 ssize_t rxm_cq_handle_rx_buf(struct rxm_rx_buf *rx_buf)
 {
-	if (OFI_LIKELY(rx_buf->pkt.ctrl_hdr.type == ofi_ctrl_data)) {
+	switch (rx_buf->pkt.ctrl_hdr.type) {
+	case ofi_ctrl_data:
 		return rxm_cq_handle_data(rx_buf);
-	} else {
-		assert(rx_buf->pkt.ctrl_hdr.type == ofi_ctrl_large_data);
+	case ofi_ctrl_large_data:
 		return rxm_cq_handle_large_data(rx_buf);
+	case ofi_ctrl_seg_data:
+		return rxm_cq_handle_seg_data(rx_buf);
+	default:
+		FI_WARN(&rxm_prov, FI_LOG_CQ, "Unknown message type\n");
+		assert(0);
+		return -FI_EINVAL;
 	}
 }
 
@@ -479,6 +515,16 @@ static inline ssize_t rxm_handle_recv_comp(struct rxm_rx_buf *rx_buf)
 		assert(0);
 		return -FI_EINVAL;
 	}
+}
+
+static inline
+ssize_t rxm_sar_handle_segment(struct rxm_rx_buf *rx_buf)
+{
+	rx_buf->conn = rxm_key2conn(rx_buf->ep,
+				    rx_buf->pkt.ctrl_hdr.conn_id);
+	if (OFI_UNLIKELY(!rx_buf->conn))
+		return -FI_EOTHER;
+	return rxm_cq_handle_seg_data(rx_buf);
 }
 
 static ssize_t rxm_lmt_send_ack(struct rxm_rx_buf *rx_buf)
@@ -610,6 +656,19 @@ static ssize_t rxm_cq_handle_comp(struct rxm_ep *rxm_ep,
 		assert((rx_buf->pkt.hdr.version == OFI_OP_VERSION) &&
 		       (rx_buf->pkt.ctrl_hdr.version == RXM_CTRL_VERSION));
 
+		switch (rx_buf->pkt.ctrl_hdr.type) {
+		case ofi_ctrl_data:
+		case ofi_ctrl_large_data:
+			return rxm_handle_recv_comp(rx_buf);
+		case ofi_ctrl_ack:
+			return rxm_lmt_handle_ack(rx_buf);
+		case ofi_ctrl_seg_data:
+			return rxm_sar_handle_segment(rx_buf);
+		default:
+			FI_WARN(&rxm_prov, FI_LOG_CQ, "Unknown message type\n");
+			assert(0);
+			return -FI_EINVAL;
+		}
 		if (rx_buf->pkt.ctrl_hdr.type == ofi_ctrl_ack)
 			return rxm_lmt_handle_ack(rx_buf);
 		else
