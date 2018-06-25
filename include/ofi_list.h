@@ -485,4 +485,88 @@ static inline int dlistfd_wait_avail(struct dlistfd_head *head, int timeout)
 	return ret ? ret : !dlistfd_empty(head);
 }
 
+/*
+ * The queue ensures multiple producers: 
+ * - single consumer (ofi_queue_get)
+ * - multiple consumers (ofi_queue_get_ts)
+ */
+struct ofi_queue_node {
+	struct ofi_queue_node *next;
+};
+
+struct ofi_queue_root {
+	struct ofi_queue_node *in_queue;
+	struct ofi_queue_node *out_queue;
+	fastlock_t lock;
+};
+
+
+#ifndef _cas
+# define _cas(ptr, oldval, newval) \
+    __sync_bool_compare_and_swap(ptr, oldval, newval)
+#endif
+
+static inline
+struct ofi_queue_root *ofi_queue_alloc(void)
+{
+	struct ofi_queue_root *root =
+		calloc(1, sizeof(struct ofi_queue_root));
+
+	fastlock_init(&root->lock);
+
+	root->in_queue = NULL;
+	root->out_queue = NULL;
+	return root;
+}
+
+static inline
+void ofi_queue_put(struct ofi_queue_node *new, struct ofi_queue_root *root)
+{
+	while (1) {
+		struct ofi_queue_node *in_queue = root->in_queue;
+		new->next = in_queue;
+		if (_cas(&root->in_queue, in_queue, new))
+			break;
+	}
+}
+
+static inline
+struct ofi_queue_node *ofi_queue_get(struct ofi_queue_root *root)
+{
+	if (!root->out_queue) {
+		while (1) {
+			struct ofi_queue_node *head = root->in_queue;
+			if (!head)
+				break;
+			if (_cas(&root->in_queue, head, NULL)) {
+				/* Reverse the order */
+				while (head) {
+					struct ofi_queue_node *next = head->next;
+					head->next = root->out_queue;
+					root->out_queue = head;
+					head = next;
+				}	
+				break;
+			}
+		}
+	}
+
+	struct ofi_queue_node *head = root->out_queue;
+	if (head)
+		root->out_queue = head->next;
+	return head;
+}
+
+static inline
+struct ofi_queue_node *ofi_queue_get_ts(struct ofi_queue_root *root)
+{
+	struct ofi_queue_node *node;
+
+	fastlock_acquire(&root->lock);
+	node = ofi_queue_get(root);
+	fastlock_release(&root->lock);
+
+	return node;
+}
+
 #endif /* _OFI_LIST_H_ */
