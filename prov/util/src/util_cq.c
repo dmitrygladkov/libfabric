@@ -201,6 +201,8 @@ ssize_t ofi_cq_readfrom(struct fid_cq *cq_fid, void *buf, size_t count,
 		ofi_cirque_discard(cq->cirq);
 	}
 out:
+	if (OFI_UNLIKELY(!dlist_empty(&cq->overflow_list)))
+		ofi_cq_read_handle_full_cirq(cq);
 	cq->cq_fastlock_release(&cq->cq_lock);
 	return i;
 }
@@ -335,6 +337,9 @@ int ofi_cq_cleanup(struct util_cq *cq)
 		if (cq->internal_wait)
 			fi_close(&cq->wait->wait_fid.fid);
 	}
+
+	if (!dlist_empty(&cq->overflow_list))
+		ofi_cq_read_handle_full_cirq(cq);
 
 	ofi_atomic_dec32(&cq->domain->ref);
 	util_comp_cirq_free(cq->cirq);
@@ -515,6 +520,7 @@ int ofi_cq_init(const struct fi_provider *prov, struct fid_domain *domain,
 		ret = -FI_ENOMEM;
 		goto err1;
 	}
+	dlist_init(&cq->overflow_list);
 
 	if (cq->domain->info_domain_caps & FI_SOURCE) {
 		cq->src = calloc(cq->cirq->size, sizeof *cq->src);

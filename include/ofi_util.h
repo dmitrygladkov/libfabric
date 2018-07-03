@@ -351,6 +351,12 @@ OFI_DECLARE_CIRQUE(struct fi_cq_tagged_entry, util_comp_cirq);
 
 typedef void (*ofi_cq_progress_func)(struct util_cq *cq);
 
+struct util_cq_entry {
+	struct dlist_entry entry;
+	struct fi_cq_tagged_entry comp;
+	fi_addr_t src;
+};
+
 struct util_cq {
 	struct fid_cq		cq_fid;
 	struct util_domain	*domain;
@@ -364,6 +370,7 @@ struct util_cq {
 
 	struct util_comp_cirq	*cirq;
 	fi_addr_t		*src;
+	struct dlist_entry	overflow_list;
 
 	struct slist		err_list;
 	fi_cq_read_func		read_entry;
@@ -395,25 +402,78 @@ static inline void util_cq_signal(struct util_cq *cq)
 	cq->wait->signal(cq->wait);
 }
 
-static inline int
-ofi_cq_write_thread_unsafe(struct util_cq *cq, void *context, uint64_t flags,
-			   size_t len, void *buf, uint64_t data, uint64_t tag)
+static inline void
+ofi_cq_fill_comp_entry(struct fi_cq_tagged_entry *comp, void *context,
+		       uint64_t flags, size_t len, void *buf,
+		       uint64_t data, uint64_t tag)
 {
-	struct fi_cq_tagged_entry *comp;
-
-	if (ofi_cirque_isfull(cq->cirq)) {
-		FI_DBG(cq->domain->prov, FI_LOG_CQ, "util_cq cirq is full!\n");
-		return -FI_EAGAIN;
-	}
-
-	comp = ofi_cirque_tail(cq->cirq);
 	comp->op_context = context;
 	comp->flags = flags;
 	comp->len = len;
 	comp->buf = buf;
 	comp->data = data;
 	comp->tag = tag;
+}
+
+static inline void
+ofi_cq_write_comp_entry(struct util_cq *cq, void *context, uint64_t flags,
+			size_t len, void *buf, uint64_t data, uint64_t tag)
+{
+	struct fi_cq_tagged_entry *comp = ofi_cirque_tail(cq->cirq);
+	ofi_cq_fill_comp_entry(comp, context, flags, len, buf, data, tag);
 	ofi_cirque_commit(cq->cirq);
+}
+
+static inline int
+ofi_cq_write_handle_full_cirq(struct util_cq *cq, void *context, uint64_t flags,
+			      size_t len, void *buf, uint64_t data, uint64_t tag,
+			      fi_addr_t src)
+{
+	int ret = 0;
+	struct util_cq_entry *entry = calloc(1, sizeof(*entry));
+	if (OFI_UNLIKELY(!entry)) {
+		ret = -FI_EINVAL;
+	} else {
+		ofi_cq_fill_comp_entry(&entry->comp, context, flags,
+				       len, buf, data, tag);
+		entry->src = src;
+		dlist_insert_tail(&entry->entry, &cq->overflow_list);
+	}
+
+	FI_DBG(cq->domain->prov, FI_LOG_CQ, "util_cq cirq is full!\n");
+	return ret;
+}
+
+static inline void ofi_cq_read_handle_full_cirq(struct util_cq *cq)
+{
+	while (!dlist_empty(&cq->overflow_list) &&
+	       (!ofi_cirque_isfull(cq->cirq))) {
+		struct util_cq_entry *entry =
+			container_of(cq->overflow_list.next,
+				     struct util_cq_entry, entry);
+
+		ofi_cq_write_comp_entry(cq, entry->comp.op_context,
+					entry->comp.flags, entry->comp.len,
+					entry->comp.buf, entry->comp.data,
+					entry->comp.tag);
+		if (cq->src)
+			cq->src[ofi_cirque_windex(cq->cirq)] = entry->src;
+
+		dlist_remove(&entry->entry);
+		free(entry);
+	}
+}
+
+static inline int
+ofi_cq_write_thread_unsafe(struct util_cq *cq, void *context, uint64_t flags,
+			   size_t len, void *buf, uint64_t data, uint64_t tag)
+{
+	if (OFI_UNLIKELY(ofi_cirque_isfull(cq->cirq))) {
+		return ofi_cq_write_handle_full_cirq(cq, context, flags, len,
+						     buf, data, tag, 0);
+	}
+
+	ofi_cq_write_comp_entry(cq, context, flags, len, buf, data, tag);
 	return 0;
 }
 
@@ -432,14 +492,18 @@ static inline int
 ofi_cq_write_src(struct util_cq *cq, void *context, uint64_t flags, size_t len,
 		 void *buf, uint64_t data, uint64_t tag, fi_addr_t src)
 {
-	int ret;
-
 	cq->cq_fastlock_acquire(&cq->cq_lock);
-	ret = ofi_cq_write_thread_unsafe(cq, context, flags, len, buf, data, tag);
-	if (!ret)
-		cq->src[ofi_cirque_windex(cq->cirq)] = src;
+
+	if (OFI_UNLIKELY(ofi_cirque_isfull(cq->cirq))) {
+		return ofi_cq_write_handle_full_cirq(cq, context, flags, len,
+						     buf, data, tag, src);
+	}
+
+	ofi_cq_write_comp_entry(cq, context, flags, len, buf, data, tag);
+	cq->src[ofi_cirque_windex(cq->cirq)] = src;
+
 	cq->cq_fastlock_release(&cq->cq_lock);
-	return ret;
+	return 0;
 }
 
 int ofi_cq_write_error(struct util_cq *cq,
