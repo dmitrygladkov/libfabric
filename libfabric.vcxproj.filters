@@ -342,12 +342,6 @@
     <ClCompile Include="prov\netdir\src\netdir_eq.c">
       <Filter>Source Files\prov\netdir\src</Filter>
     </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_ov.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_mr.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
     <ClCompile Include="prov\netdir\src\netdir_cntr.c">
       <Filter>Source Files\prov\netdir\src</Filter>
     </ClCompile>
@@ -355,12 +349,6 @@
       <Filter>Source Files\prov\netdir\src</Filter>
     </ClCompile>
     <ClCompile Include="prov\netdir\src\netdir_ep_rma.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_ep_srx.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_unexp.c">
       <Filter>Source Files\prov\netdir\src</Filter>
     </ClCompile>
     <ClCompile Include="prov\netdir\src\netdir_ndinit.c">
@@ -612,24 +600,6 @@
       <Filter>Source Files\prov\netdir\include</Filter>
     </ClInclude>
     <ClInclude Include="prov\netdir\src\netdir_log.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_iface.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_ov.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_util.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_queue.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_cq.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_unexp.h">
       <Filter>Source Files\prov\netdir\include</Filter>
     </ClInclude>
     <ClInclude Include="prov\netdir\src\netdir_buf.h">
