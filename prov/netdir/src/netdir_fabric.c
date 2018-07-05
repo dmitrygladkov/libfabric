@@ -40,9 +40,6 @@
 #include "ofi_enosys.h"
 #include "rdma/fabric.h"
 
-#include "netdir_ov.h"
-#include "netdir_iface.h"
-
 static int ofi_nd_fabric_close(fid_t fid);
 
 static struct fi_ops ofi_nd_fi_ops = {
@@ -70,49 +67,12 @@ static struct fi_ops_fabric ofi_nd_fabric_ops = {
 
 static int ofi_nd_fabric_close(fid_t fid)
 {
-	struct nd_fabric *fabric;
-	fabric = container_of(fid, struct nd_fabric, fid.fid);
-	free(fabric);
-	/* due to issues in cleanup NetworkDirect on library
-	   unload make clening here, on fabric close */
-	ofi_nd_shutdown();
 	return FI_SUCCESS;
 }
 
 int ofi_nd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fab,
 		  void *context)
 {
-	OFI_UNUSED(context);
-
-	if (attr) {
-		if (attr->name && strcmp(attr->name, ofi_nd_prov.name))
-			return -FI_EINVAL;
-		if (attr->prov_name && strcmp(attr->prov_name, ofi_nd_prov.name))
-			return -FI_EINVAL;
-		if (attr->prov_version && attr->prov_version != ofi_nd_prov.version)
-			return -FI_EINVAL;
-	}
-
-	struct nd_fabric *fabric = (struct nd_fabric*)calloc(1, sizeof(*fabric));
-	if (!fabric)
-		return -FI_ENOMEM;
-
-	struct nd_fabric def = {
-		.fid = {
-			.fid = ofi_nd_fid,
-			.ops = &ofi_nd_fabric_ops
-		}
-	};
-
-	*fabric = def;
-
-	*fab = &fabric->fid;
-
-	fi_param_get_int(&ofi_nd_prov, "inlinethr", &gl_data.inline_thr);
-	fi_param_get_int(&ofi_nd_prov, "prepostcnt", &gl_data.prepost_cnt);
-	fi_param_get_int(&ofi_nd_prov, "prepostbufcnt", &gl_data.prepost_buf_cnt);
-
-	gl_data.total_avail = gl_data.prepost_cnt * gl_data.prepost_buf_cnt;
 
 	return FI_SUCCESS;
 }
