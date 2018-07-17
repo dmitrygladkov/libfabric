@@ -111,44 +111,6 @@ static void rxm_conn_wake_up_wait_obj(struct rxm_ep *rxm_ep)
 		util_cntr_signal(rxm_ep->util_ep.tx_cntr);
 }
 
-static void rxm_txe_init(struct rxm_tx_entry *entry, void *arg)
-{
-	struct rxm_send_queue *send_queue = arg;
-	entry->conn 	= send_queue->rxm_conn;
-	entry->ep 	= send_queue->rxm_ep;
-}
-
-int rxm_send_queue_init(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
-			struct rxm_send_queue *send_queue, size_t size)
-{
-	send_queue->rxm_conn = rxm_conn;
-	send_queue->rxm_ep = rxm_ep;
-	send_queue->fs = rxm_txe_fs_create(size, rxm_txe_init, send_queue);
-	if (!send_queue->fs)
-		return -FI_ENOMEM;
-
-	fastlock_init(&send_queue->lock);
-	return 0;
-}
-
-void rxm_send_queue_close(struct rxm_send_queue *send_queue)
-{
-	if (send_queue->fs) {
-		struct rxm_tx_entry *tx_entry;
-		ssize_t i;
-
-		for (i = send_queue->fs->size - 1; i >= 0; i--) {
-			tx_entry = &send_queue->fs->entry[i].buf;
-			if (tx_entry->tx_buf) {
-				rxm_tx_buf_release(tx_entry->ep, tx_entry->tx_buf);
-				tx_entry->tx_buf = NULL;
-			}
-		}
-		rxm_txe_fs_free(send_queue->fs);
-	}
-	fastlock_destroy(&send_queue->lock);
-}
-
 static void rxm_conn_close(struct util_cmap_handle *handle)
 {
 	struct rxm_conn *rxm_conn = container_of(handle, struct rxm_conn, handle);
@@ -184,7 +146,10 @@ static void rxm_conn_free(struct util_cmap_handle *handle)
 	} else {
 conn_free:
 		rxm_conn_close_msg_ep(rxm_ep, rxm_conn);
-		rxm_send_queue_close(&rxm_conn->send_queue);
+		if (!rxm_ep->send_queue) {
+			rxm_send_queue_close(rxm_conn->send_queue);
+			free(rxm_conn->send_queue);
+		}
 		free(rxm_conn);
 	}
 }
@@ -223,11 +188,20 @@ static struct util_cmap_handle *rxm_conn_alloc(struct util_cmap *cmap)
 	struct rxm_conn *rxm_conn = calloc(1, sizeof(*rxm_conn));
 	if (OFI_UNLIKELY(!rxm_conn))
 		return NULL;
-	ret = rxm_send_queue_init(rxm_ep, rxm_conn, &rxm_conn->send_queue,
-				  rxm_ep->rxm_info->tx_attr->size);
-	if (ret) {
-		free(rxm_conn);
-		return NULL;
+	if (rxm_ep->send_queue) {
+		rxm_conn->send_queue = rxm_ep->send_queue;
+	} else {
+		rxm_conn->send_queue = calloc(1, sizeof(*rxm_conn->send_queue));
+		if (!rxm_conn->send_queue) {
+			return NULL;
+		}
+		ret = rxm_send_queue_init(rxm_ep, rxm_conn->send_queue,
+					  rxm_ep->rxm_info->tx_attr->size);
+		if (ret) {
+			free(rxm_conn->send_queue);
+			free(rxm_conn);
+			return NULL;
+		}
 	}
 	dlist_init(&rxm_conn->sar_rx_msg_list);
 	dlist_init(&rxm_conn->deferred_op_list);

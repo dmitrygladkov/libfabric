@@ -291,6 +291,9 @@ RXM_INI
 			"memory consumption, but it may increase small message "
 			"latency as a side-effect.");
 
+	fi_param_define(&rxm_prov, "fair_queues", FI_PARAM_BOOL,
+			"Use TX/RX queue per connection instead of shared TX/RX queus.");
+
 	if (rxm_init_info()) {
 		FI_WARN(&rxm_prov, FI_LOG_CORE, "Unable to initialize rxm_info\n");
 		return NULL;

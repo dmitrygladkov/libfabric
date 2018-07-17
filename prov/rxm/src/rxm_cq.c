@@ -291,7 +291,7 @@ static inline int rxm_finish_sar_segment_send(struct rxm_tx_buf *tx_buf)
 		rxm_cq_write_error(tx_entry->ep->util_ep.tx_cq,
 				   tx_entry->ep->util_ep.tx_cntr,
 				   tx_entry->context, -FI_ENOMEM);
-		rxm_tx_entry_release(&tx_entry->conn->send_queue, tx_entry);
+		rxm_tx_entry_release(tx_entry->conn->send_queue, tx_entry);
 	}
 	return FI_SUCCESS;
 }
@@ -347,7 +347,7 @@ static int rxm_lmt_handle_ack(struct rxm_rx_buf *rx_buf)
 	FI_DBG(&rxm_prov, FI_LOG_CQ, "Got ACK for msg_id: 0x%" PRIx64 "\n",
 	       rx_buf->pkt.ctrl_hdr.msg_id);
 
-	tx_entry = &rxm_conn->send_queue.fs->entry[rx_buf->pkt.ctrl_hdr.msg_id].buf;
+	tx_entry = &rxm_conn->send_queue->fs->entry[rx_buf->pkt.ctrl_hdr.msg_id].buf;
 
 	assert(tx_entry->tx_buf->pkt.ctrl_hdr.msg_id == rx_buf->pkt.ctrl_hdr.msg_id);
 
@@ -606,7 +606,7 @@ static ssize_t rxm_lmt_send_ack(struct rxm_rx_buf *rx_buf)
 	}
 	assert(tx_buf->pkt.ctrl_hdr.type == ofi_ctrl_ack);
 
-	tx_entry = rxm_tx_entry_get(&rx_buf->conn->send_queue);
+	tx_entry = rxm_tx_entry_get(rx_buf->conn->send_queue);
 	if (OFI_UNLIKELY(!tx_entry)) {
 		ret = -FI_EAGAIN;
 		goto err1;
@@ -618,6 +618,7 @@ static ssize_t rxm_lmt_send_ack(struct rxm_rx_buf *rx_buf)
 	tx_entry->state 	= rx_buf->hdr.state;
 	tx_entry->context 	= rx_buf;
 	tx_entry->tx_buf 	= tx_buf;
+	tx_entry->conn		= rx_buf->conn;
 
 	tx_buf->pkt.ctrl_hdr.conn_id 	= rx_buf->conn->handle.remote_key;
 	tx_buf->pkt.ctrl_hdr.msg_id 	= rx_buf->pkt.ctrl_hdr.msg_id;
@@ -630,7 +631,7 @@ static ssize_t rxm_lmt_send_ack(struct rxm_rx_buf *rx_buf)
 	}
 	return 0;
 err2:
-	rxm_tx_entry_release(&rx_buf->conn->send_queue, tx_entry);
+	rxm_tx_entry_release(rx_buf->conn->send_queue, tx_entry);
 err1:
 	rxm_tx_buf_release(rx_buf->ep, tx_buf);
 	return ret;
@@ -749,7 +750,7 @@ static ssize_t rxm_cq_handle_comp(struct rxm_ep *rxm_ep,
 		assert(comp->flags & FI_SEND);
 		rx_buf = tx_entry->context;
 		rxm_tx_buf_release(rx_buf->ep, tx_entry->tx_buf);
-		rxm_tx_entry_release(&tx_entry->conn->send_queue, tx_entry);
+		rxm_tx_entry_release(tx_entry->conn->send_queue, tx_entry);
 		return rxm_finish_send_lmt_ack(rx_buf);
 	default:
 		FI_WARN(&rxm_prov, FI_LOG_CQ, "Invalid state!\n");
@@ -1082,7 +1083,10 @@ fn:
 		case UTIL_CMAP_CMD_CONN_FREE:
 			cmd_data = (struct rxm_cmap_cmd_data *)cmd->data;
 			rxm_conn_close_msg_ep(rxm_ep, cmd_data->rxm_conn);
-			rxm_send_queue_close(&cmd_data->rxm_conn->send_queue);
+			if (!rxm_ep->send_queue) {
+				rxm_send_queue_close(cmd_data->rxm_conn->send_queue);
+				free(cmd_data->rxm_conn->send_queue);
+			}
 			free(cmd_data->rxm_conn);
 			break;
 		default:

@@ -392,7 +392,6 @@ DECLARE_FREESTACK(struct rxm_recv_entry, rxm_recv_fs);
 
 struct rxm_send_queue {
 	struct rxm_ep *rxm_ep;
-	struct rxm_conn *rxm_conn;
 	struct rxm_txe_fs *fs;
 	fastlock_t lock;
 };
@@ -447,6 +446,7 @@ struct rxm_ep {
 	struct dlist_entry	repost_ready_list;
 	struct dlist_entry	conn_deferred_list;
 
+	struct rxm_send_queue	*send_queue; /* Not a NULL if this is shared */
 	struct rxm_recv_queue	recv_queue;
 	struct rxm_recv_queue	trecv_queue;
 
@@ -470,7 +470,7 @@ struct rxm_conn {
 	struct dlist_entry conn_deferred_entry;
 	struct dlist_entry deferred_op_list;
 
-	struct rxm_send_queue send_queue;
+	struct rxm_send_queue *send_queue;
 	struct dlist_entry sar_rx_msg_list;
 	struct util_cmap_handle handle;
 
@@ -609,8 +609,9 @@ rxm_check_unexp_msg_list(struct rxm_recv_queue *recv_queue, fi_addr_t addr,
 
 	entry = dlist_find_first_match(&recv_queue->unexp_msg_list,
 				       recv_queue->match_unexp, &match_attr);
-	if (!entry)
+	if (!entry) {
 		return NULL;
+	}
 
 	RXM_DBG_ADDR_TAG(FI_LOG_EP_DATA, "Match for posted recv found in unexp"
 			 " msg list\n", match_attr.addr, match_attr.tag);
@@ -677,7 +678,7 @@ rxm_acquire_conn(struct rxm_ep *rxm_ep, fi_addr_t fi_addr)
 void rxm_conn_close_msg_ep(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn);
 int rxm_msg_ep_open(struct rxm_ep *rxm_ep, struct fi_info *msg_info,
 		    struct rxm_conn *rxm_conn);
-int rxm_send_queue_init(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
+int rxm_send_queue_init(struct rxm_ep *rxm_ep,
 			struct rxm_send_queue *send_queue, size_t size);
 void rxm_send_queue_close(struct rxm_send_queue *send_queue);
 
@@ -899,7 +900,7 @@ static inline int rxm_finish_send_nobuf(struct rxm_tx_entry *tx_entry)
 		else
 			rxm_cntr_inc(tx_entry->ep->util_ep.rd_cntr);
 	}
-	rxm_tx_entry_release(&tx_entry->conn->send_queue, tx_entry);
+	rxm_tx_entry_release(tx_entry->conn->send_queue, tx_entry);
 	return 0;
 }
 

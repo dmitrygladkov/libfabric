@@ -112,7 +112,7 @@ rxm_ep_format_rma_res_lightweight(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_co
 				  uint64_t comp_flags, const struct fi_msg_rma *orig_msg,
 				  struct rxm_tx_entry **tx_entry)
 {
-	*tx_entry = rxm_tx_entry_get(&rxm_conn->send_queue);
+	*tx_entry = rxm_tx_entry_get(rxm_conn->send_queue);
 	if (OFI_UNLIKELY(!*tx_entry)) {
 		FI_WARN(&rxm_prov, FI_LOG_CQ,
 			"Unable to allocate TX entry for RMA!\n");
@@ -120,6 +120,7 @@ rxm_ep_format_rma_res_lightweight(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_co
 		return -FI_EAGAIN;
 	}
 
+	(*tx_entry)->conn = rxm_conn;
 	(*tx_entry)->state = RXM_TX_NOBUF;
 	(*tx_entry)->context = orig_msg->context;
 	(*tx_entry)->flags = flags;
@@ -174,7 +175,7 @@ rxm_ep_format_rma_res(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 	return FI_SUCCESS;
 err:
 	FI_WARN(&rxm_prov, FI_LOG_CQ, "Unable to allocate RMA resources!\n");
-	rxm_tx_entry_release(&rxm_conn->send_queue, *tx_entry);
+	rxm_tx_entry_release(rxm_conn->send_queue, *tx_entry);
 	return ret;
 }
 
@@ -268,7 +269,7 @@ rma_continue:
 	if ((rxm_ep->msg_mr_local) && (!rxm_ep->rxm_mr_local))
 		rxm_ep_msg_mr_closev(tx_entry->mr, tx_entry->count);
 err:
-	rxm_tx_entry_release(&rxm_conn->send_queue, tx_entry);
+	rxm_tx_entry_release(rxm_conn->send_queue, tx_entry);
 	return ret;
 }
 
@@ -393,7 +394,7 @@ rma_inject_continue:
 	return 0;
 err:
 	rxm_rma_buf_release(rxm_ep, tx_entry->rma_buf);
-	rxm_tx_entry_release(&rxm_conn->send_queue, tx_entry);
+	rxm_tx_entry_release(rxm_conn->send_queue, tx_entry);
 	return ret;
 }
 
