@@ -854,6 +854,13 @@ fi_ibv_send_poll_cq_if_needed(struct fi_ibv_ep *ep, struct ibv_send_wr *wr)
 			return -FI_EAGAIN;
 		/* Try again and return control to a caller */
 		ret = fi_ibv_handle_post(ibv_post_send(ep->id->qp, wr, &bad_wr));
+	} else {
+		struct fi_ibv_cq *cq =
+			container_of(ep->util_ep.tx_cq, struct fi_ibv_cq, util_cq);
+		if (++cq->unsignalled_cnt > 64) {
+			(void) fi_ibv_poll_reap_unsig_cq(ep);
+			cq->unsignalled_cnt = 0;
+		}
 	}
 	return ret;
 }

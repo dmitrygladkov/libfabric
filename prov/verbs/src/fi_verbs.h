@@ -363,6 +363,7 @@ struct fi_ibv_cq {
 	fi_ibv_trywait_func	trywait;
 	ofi_atomic32_t		nevents;
 	struct util_buf_pool	*wce_pool;
+	int			unsignalled_cnt;
 };
 
 struct fi_ibv_rdm_request;
