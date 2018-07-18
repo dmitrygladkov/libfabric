@@ -408,6 +408,9 @@ static int rxm_ep_txrx_res_open(struct rxm_ep *rxm_ep,
 			rxm_ep->sar_limit = param;
 	} else {
 		rxm_ep->sar_limit = RXM_SAR_LIMIT;
+		if (!getenv("FI_VERBS_MR_CACHE_ENABLE")) {
+			rxm_ep->sar_limit = (size_t)-1;
+		}
 	}
 
 	return FI_SUCCESS;
