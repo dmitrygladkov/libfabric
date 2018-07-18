@@ -1000,10 +1000,12 @@ static int rxm_cq_reprocess_recv_queues(struct rxm_ep *rxm_ep)
 {
 	int count = 0;
 
-	fastlock_acquire(&rxm_ep->util_ep.cmap->lock);
-	count += rxm_cq_reprocess_directed_recvs(&rxm_ep->recv_queue);
-	count += rxm_cq_reprocess_directed_recvs(&rxm_ep->trecv_queue);
-	fastlock_release(&rxm_ep->util_ep.cmap->lock);
+	if (rxm_ep->rxm_info->caps & FI_DIRECTED_RECV) {
+		fastlock_acquire(&rxm_ep->util_ep.cmap->lock);
+		count += rxm_cq_reprocess_directed_recvs(&rxm_ep->recv_queue);
+		count += rxm_cq_reprocess_directed_recvs(&rxm_ep->trecv_queue);
+		fastlock_release(&rxm_ep->util_ep.cmap->lock);
+	}
 
 	return count;
 }
