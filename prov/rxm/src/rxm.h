@@ -729,20 +729,13 @@ rxm_ep_normal_send(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 static inline
 struct rxm_buf *rxm_buf_get(struct rxm_buf_pool *pool)
 {
-	struct rxm_buf *buf;
-
-	pool->rxm_ep->res_fastlock_acquire(&pool->lock);
-	buf = util_buf_alloc(pool->pool);
-	pool->rxm_ep->res_fastlock_release(&pool->lock);
-	return buf;
+	return util_buf_alloc(pool->pool);
 }
 
 static inline
 void rxm_buf_release(struct rxm_buf_pool *pool, struct rxm_buf *buf)
 {
-	pool->rxm_ep->res_fastlock_acquire(&pool->lock);
 	util_buf_release(pool->pool, buf);
-	pool->rxm_ep->res_fastlock_release(&pool->lock);
 }
 
 static inline struct rxm_tx_buf *
@@ -753,7 +746,10 @@ rxm_tx_buf_get(struct rxm_ep *rxm_ep, enum rxm_buf_pool_type type)
 	       (type == RXM_BUF_POOL_TX_ACK) ||
 	       (type == RXM_BUF_POOL_TX_LMT) ||
 	       (type == RXM_BUF_POOL_TX_SAR));
-	return (struct rxm_tx_buf *)rxm_buf_get(&rxm_ep->buf_pools[type]);
+	rxm_ep->res_fastlock_acquire(&rxm_ep->buf_pools[type].lock);
+	struct rxm_tx_buf *tx_buf = (struct rxm_tx_buf *)rxm_buf_get(&rxm_ep->buf_pools[type]);
+	rxm_ep->res_fastlock_acquire(&rxm_ep->buf_pools[type].lock);
+	return tx_buf;
 }
 
 static inline void
@@ -769,34 +765,46 @@ rxm_tx_buf_release(struct rxm_ep *rxm_ep, struct rxm_tx_buf *tx_buf)
 	       (tx_buf->pkt.ctrl_hdr.type == ofi_ctrl_seg_data) ||
 	       (tx_buf->pkt.ctrl_hdr.type == ofi_ctrl_ack));
 	tx_buf->pkt.hdr.flags = 0;
+	rxm_ep->res_fastlock_acquire(&rxm_ep->buf_pools[tx_buf->type].lock);
 	rxm_buf_release(&rxm_ep->buf_pools[tx_buf->type],
 			(struct rxm_buf *)tx_buf);
+	rxm_ep->res_fastlock_release(&rxm_ep->buf_pools[tx_buf->type].lock);
 }
 
 static inline struct rxm_rx_buf *rxm_rx_buf_get(struct rxm_ep *rxm_ep)
 {
-	return (struct rxm_rx_buf *)rxm_buf_get(
+	fastlock_acquire(&rxm_ep->buf_pools[RXM_BUF_POOL_RX].lock);
+	struct rxm_rx_buf *rx_buf = (struct rxm_rx_buf *)rxm_buf_get(
 			&rxm_ep->buf_pools[RXM_BUF_POOL_RX]);
+	fastlock_release(&rxm_ep->buf_pools[RXM_BUF_POOL_RX].lock);
+	return rx_buf;
 }
 
 static inline void
 rxm_rx_buf_release(struct rxm_ep *rxm_ep, struct rxm_rx_buf *rx_buf)
 {
+	fastlock_acquire(&rxm_ep->buf_pools[RXM_BUF_POOL_RX].lock);
 	rxm_buf_release(&rxm_ep->buf_pools[RXM_BUF_POOL_RX],
 			(struct rxm_buf *)rx_buf);
+	fastlock_release(&rxm_ep->buf_pools[RXM_BUF_POOL_RX].lock);
 }
 
 static inline struct rxm_rma_buf *rxm_rma_buf_get(struct rxm_ep *rxm_ep)
 {
-	return (struct rxm_rma_buf *)rxm_buf_get(
+	rxm_ep->res_fastlock_acquire(&rxm_ep->buf_pools[RXM_BUF_POOL_RMA].lock);
+	struct rxm_rma_buf *rma_buf = (struct rxm_rma_buf *)rxm_buf_get(
 			&rxm_ep->buf_pools[RXM_BUF_POOL_RMA]);
+	rxm_ep->res_fastlock_release(&rxm_ep->buf_pools[RXM_BUF_POOL_RMA].lock);
+	return rma_buf;
 }
 
 static inline void
 rxm_rma_buf_release(struct rxm_ep *rxm_ep, struct rxm_rma_buf *rx_buf)
 {
+	rxm_ep->res_fastlock_acquire(&rxm_ep->buf_pools[RXM_BUF_POOL_RMA].lock);
 	rxm_buf_release(&rxm_ep->buf_pools[RXM_BUF_POOL_RMA],
 			(struct rxm_buf *)rx_buf);
+	rxm_ep->res_fastlock_release(&rxm_ep->buf_pools[RXM_BUF_POOL_RMA].lock);
 }
 
 #define rxm_entry_pop(queue, entry)					\
