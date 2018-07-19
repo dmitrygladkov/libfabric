@@ -383,13 +383,8 @@ static int rxm_ep_txrx_res_open(struct rxm_ep *rxm_ep,
 	       "MSG provider mr_mode & FI_MR_LOCAL: %d\n",
 	       rxm_ep->msg_mr_local);
 
-	if (domain->threading != FI_THREAD_SAFE) {
-		rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire_noop;
-		rxm_ep->res_fastlock_release = ofi_fastlock_release_noop;
-	} else {
-		rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire;
-		rxm_ep->res_fastlock_release = ofi_fastlock_release;
-	}
+	rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire;
+	rxm_ep->res_fastlock_release = ofi_fastlock_release;
 
 	ret = rxm_ep_txrx_pool_create(rxm_ep);
 	if (ret)
