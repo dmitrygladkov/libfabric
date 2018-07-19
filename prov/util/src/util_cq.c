@@ -504,11 +504,7 @@ static int fi_cq_init(struct fid_domain *domain, struct fi_cq_attr *attr,
 	dlist_init(&cq->ep_list);
 	fastlock_init(&cq->ep_list_lock);
 	fastlock_init(&cq->cq_lock);
-	if (cq->domain->threading == FI_THREAD_COMPLETION ||
-	    (cq->domain->threading == FI_THREAD_DOMAIN)) {
-		cq->cq_fastlock_acquire = ofi_fastlock_acquire_noop;
-		cq->cq_fastlock_release = ofi_fastlock_release_noop;
-	} else {
+	{
 		cq->cq_fastlock_acquire = ofi_fastlock_acquire;
 		cq->cq_fastlock_release = ofi_fastlock_release;
 	}
