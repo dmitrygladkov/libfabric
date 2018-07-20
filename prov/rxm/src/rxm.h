@@ -469,10 +469,6 @@ struct rxm_conn {
 	struct dlist_entry posted_rx_list;
 	struct dlist_entry sar_rx_msg_list;
 	struct util_cmap_handle handle;
-	/* This is saved MSG EP fid, that hasn't been closed during
-	 * handling of CONN_RECV in CMAP_CONNREQ_SENT for passive side */
-	struct fid_ep *saved_msg_ep;
-	struct dlist_entry saved_posted_rx_list;
 };
 
 struct rxm_ep_wait_ref {
