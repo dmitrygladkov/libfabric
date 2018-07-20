@@ -151,8 +151,6 @@ int rxm_info_to_rxm(uint32_t version, const struct fi_info *core_info,
 
 static int rxm_init_info(void)
 {
-	
-	rxm_info.tx_attr->inject_size -= sizeof(struct rxm_pkt);
 	rxm_util_prov.info = &rxm_info;
 	return 0;
 }
