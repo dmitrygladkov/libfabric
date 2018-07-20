@@ -399,7 +399,7 @@ static int rxm_ep_txrx_res_open(struct rxm_ep *rxm_ep,
 		goto err;
 
 	if (!fi_param_get_size_t(&rxm_prov, "sar_limit", &param)) {
-		if (param < rxm_info.tx_attr->inject_size)
+		if (param < rxm_ep->eager_size)
 			FI_WARN(&rxm_prov, FI_LOG_CORE,
 				"Requested SAR limit (%zd) less than inject size (%zd). "
 				"SAR protocol won't be used. Messages of size <= (>) inject "
@@ -1249,27 +1249,28 @@ inject_continue:
 		}
 	}
 
-		ret = rxm_ep_format_tx_inject_buf(
-				rxm_ep, rxm_conn, buf, len,
-				data, flags, tag, op, comp_flags,
-				&rxm_ep->buf_pools[RXM_BUF_POOL_TX_INJECT], &tx_buf);
-		if (OFI_UNLIKELY(ret))
-	    		return ret;
-		ret = rxm_ep_inject_send(rxm_ep, rxm_conn, tx_buf, pkt_size);
-		if (OFI_UNLIKELY(ret))
-			goto defer;
-		/* release allocated buffer for further reuse */
-		rxm_tx_buf_release(rxm_ep, tx_buf);
+	ret = rxm_ep_format_tx_inject_buf(rxm_ep, rxm_conn, buf, len,
+					  data, flags, tag, op, comp_flags,
+					  &rxm_ep->buf_pools[RXM_BUF_POOL_TX_INJECT],
+					  &tx_buf);
+	if (OFI_UNLIKELY(ret))
 		return ret;
+	ret = rxm_ep_inject_send(rxm_ep, rxm_conn, tx_buf, pkt_size);
+	if (OFI_UNLIKELY(ret))
+		goto defer;
+	/* release allocated buffer for further reuse */
+	rxm_tx_buf_release(rxm_ep, tx_buf);
+	return ret;
 defer:
 	if (!tx_buf) {
 		struct iovec iov = {
 			.iov_base = (void *)buf,
 			.iov_len = len
 		};
-		ret = rxm_ep_prepare_deferred_tx(
-			rxm_ep, rxm_conn, len, (const struct iovec *)&iov,
-			1, NULL, data, flags, tag, op, comp_flags, &tx_buf);
+		ret = rxm_ep_prepare_deferred_tx(rxm_ep, rxm_conn, len,
+						 (const struct iovec *)&iov,
+						 1, NULL, data, flags, tag, op,
+						 comp_flags, &tx_buf);
 	}
 	return rxm_ep_defer_tx_inject(rxm_ep, rxm_conn, NULL, 1,
 				      flags, comp_flags, tx_buf);
