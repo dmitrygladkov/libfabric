@@ -1408,7 +1408,8 @@ void ofi_cmap_process_conn_notify(struct util_cmap *cmap,
 	FI_DBG(cmap->av->prov, FI_LOG_EP_CTRL,
 	       "Processing connection notification for handle: %p.\n", handle);
 	handle->state = CMAP_CONNECTED;
-	cmap->attr.connected_handler(handle);
+	if (cmap->attr.connected_handler)
+		cmap->attr.connected_handler(handle);
 }
 
 /* Caller must hold cmap->lock */
