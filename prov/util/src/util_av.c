@@ -1387,7 +1387,6 @@ void ofi_cmap_process_shutdown(struct util_cmap *cmap,
 			"Invalid handle on shutdown event\n");
 	} else if (handle->state != CMAP_SHUTDOWN) {
 		FI_DBG(cmap->av->prov, FI_LOG_EP_CTRL, "Got remote shutdown\n");
-		util_cmap_del_handle(handle);
 	} else {
 		FI_DBG(cmap->av->prov, FI_LOG_EP_CTRL, "Got local shutdown\n");
 	}
