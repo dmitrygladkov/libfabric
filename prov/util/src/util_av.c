@@ -1372,15 +1372,14 @@ int ofi_cmap_update(struct util_cmap *cmap, const void *addr, fi_addr_t fi_addr)
 	handle = util_cmap_get_handle_peer(cmap, addr);
 	if (!handle) {
 		ret = util_cmap_alloc_handle(cmap, fi_addr, CMAP_IDLE, &handle);
+		fastlock_release(&cmap->lock);
 		goto out;
 	}
 	util_cmap_move_handle(handle, fi_addr);
+	fastlock_release(&cmap->lock);
 
 	if (cmap->attr.av_updated_handler)
 		cmap->attr.av_updated_handler(handle);
-	cmap->av_updated = 1;
-out:
-	fastlock_release(&cmap->lock);
 	return ret;
 }
 
