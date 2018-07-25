@@ -61,6 +61,7 @@ struct ofi_prov {
 static struct ofi_prov *prov_head, *prov_tail;
 int ofi_init = 0;
 extern struct ofi_common_locks common_locks;
+static int must_use_util_prov = 0;
 
 static struct fi_filter prov_filter;
 
@@ -300,6 +301,11 @@ static int ofi_register_provider(struct fi_provider *provider, void *dlhandle)
 		ret = -FI_ENODEV;
 		goto cleanup;
 	}
+
+	if ((0 == strcmp(provider->name, "verbs")) ||
+	    (0 == strcmp(provider->name, "tcp")) ||
+	    (0 == strcmp(provider->name, "udp")))
+		must_use_util_prov = 1;
 
 	if (ofi_apply_filter(&prov_log_filter, provider->name))
 		ctx->disable_logging = 1;
@@ -728,6 +734,7 @@ int DEFAULT_SYMVER_PRE(fi_getinfo)(uint32_t version, const char *node,
 	struct ofi_prov *prov;
 	struct fi_info *tail, *cur;
 	char **prov_vec = NULL;
+	struct ofi_prov *real_prov_head = NULL;
 	size_t count = 0;
 	int ret;
 
@@ -753,10 +760,39 @@ int DEFAULT_SYMVER_PRE(fi_getinfo)(uint32_t version, const char *node,
 		       hints->fabric_attr->prov_name);
 	}
 
+	prov = prov_head;
+try_again:
+	for (; (prov && !real_prov_head); prov = prov->next) {
+		if (!prov->provider)
+			continue;
+		if ((0 == strcmp(prov->provider->name, "ofi_rxm")) ||
+		    (0 == strcmp(prov->provider->name, "ofi_rxd")))
+			continue;
+		real_prov_head = prov;
+	}
+
 	*info = tail = NULL;
 	for (prov = prov_head; prov; prov = prov->next) {
 		if (!prov->provider || !prov->provider->getinfo)
 			continue;
+
+		if (!must_use_util_prov &&
+		    (0 == strcmp(prov->provider->name, "ofi_rxm") ||
+		     0 == strcmp(prov->provider->name, "ofi_rxd")))
+			continue;
+
+		if (real_prov_head &&
+		    !((0 == strcmp(prov->provider->name, "ofi_rxm")) ||
+		      (0 == strcmp(prov->provider->name, "ofi_rxd"))) &&
+		    strcmp(prov->provider->name, real_prov_head->provider->name)) {
+			FI_INFO(&core_prov, FI_LOG_CORE,
+				"Since %s can be used, %s has been skipped. "
+				"To use %s, please, set FI_PROVIDER=%s\n",
+				real_prov_head->provider->name,
+				prov->provider->name, prov->provider->name,
+				prov->provider->name);
+			continue;
+		}
 
 		if (!ofi_layering_ok(prov->provider, prov_vec, count, flags))
 			continue;
@@ -799,8 +835,17 @@ int DEFAULT_SYMVER_PRE(fi_getinfo)(uint32_t version, const char *node,
 		ofi_set_prov_attr(tail->fabric_attr, prov->provider);
 		tail->fabric_attr->api_version = version;
 	}
-	ofi_free_string_array(prov_vec);
 
+	if (!(*info) && real_prov_head) {
+		prov = real_prov_head->next;
+		real_prov_head = NULL;
+		/* this hack helps us to identify who calls the `fi_getinfo`
+		 * (RxM/RxD with ep_type = MSG/DGRAM or IMPI with ep_type = RDM) */
+		if (hints && hints->ep_attr && (hints->ep_attr->type == FI_EP_RDM))
+			goto try_again;
+	}
+
+	ofi_free_string_array(prov_vec);
 	return *info ? 0 : -FI_ENODATA;
 }
 CURRENT_SYMVER(fi_getinfo_, fi_getinfo);
