@@ -45,6 +45,7 @@ static ssize_t
 ofi_nd_ep_read(struct fid_ep *ep, void *buf, size_t len, void *desc,
 	       fi_addr_t src_addr, uint64_t addr, uint64_t key, void *context)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
@@ -52,18 +53,21 @@ ofi_nd_ep_readv(struct fid_ep *pep, const struct iovec *iov, void **desc,
 		size_t count, fi_addr_t src_addr, uint64_t addr, uint64_t key,
 		void *context)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
 ofi_nd_ep_readmsg(struct fid_ep *pep, const struct fi_msg_rma *msg,
 		  uint64_t flags)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
 ofi_nd_ep_write(struct fid_ep *ep, const void *buf, size_t len, void *desc,
 		fi_addr_t dest_addr, uint64_t addr, uint64_t key, void *context)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
@@ -71,18 +75,21 @@ ofi_nd_ep_writev(struct fid_ep *pep, const struct iovec *iov, void **desc,
 		 size_t count, fi_addr_t dest_addr, uint64_t addr, uint64_t key,
 		 void *context)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
 ofi_nd_ep_writemsg(struct fid_ep *pep, const struct fi_msg_rma *msg,
 		   uint64_t flags)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
 ofi_nd_ep_inject(struct fid_ep *pep, const void *buf, size_t len,
 		 fi_addr_t dest_addr, uint64_t addr, uint64_t key)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
@@ -90,6 +97,7 @@ ofi_nd_ep_writedata(struct fid_ep *pep, const void *buf, size_t len, void *desc,
 		    uint64_t data, fi_addr_t dest_addr, uint64_t addr, uint64_t key,
 		    void *context)
 {
+	return -FI_ENOSYS;
 }
 
 static ssize_t
@@ -97,6 +105,7 @@ ofi_nd_ep_writeinjectdata(struct fid_ep *ep, const void *buf, size_t len,
 			  uint64_t data, fi_addr_t dest_addr, uint64_t addr,
 			  uint64_t key)
 {
+	return -FI_ENOSYS;
 }
 
 struct fi_ops_rma ofi_nd_ep_rma = {
