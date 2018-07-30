@@ -37,6 +37,7 @@
 
 #include "netdir.h"
 #include "netdir_log.h"
+#include "netdir_misc.h"
 
 #include "ofi.h"
 #include "ofi_util.h"
@@ -44,22 +45,11 @@
 #include "rdma/fabric.h"
 #include "rdma/fi_domain.h"
 
-static int ofi_nd_domain_close(fid_t fid)
-{
-	return 0;
-}
-
+static int ofi_nd_domain_close(fid_t fid);
 int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
-		       struct fid_domain **pdomain, void *context)
-{
-	return 0;
-}
-
+		       struct fid_domain **pdomain, void *context);
 static int ofi_nd_domain_bind(struct fid *fid, struct fid *bfid,
-			      uint64_t flags)
-{
-	return FI_SUCCESS;
-}
+			      uint64_t flags);
 
 static struct fi_ops_domain ofi_nd_domain_ops = {
 	.size = sizeof(ofi_nd_domain_ops),
@@ -88,6 +78,64 @@ static struct fid ofi_nd_fid = {
 	.context = NULL,
 	.ops = &ofi_nd_fi_ops
 };
+
+
+static int ofi_nd_domain_close(fid_t fid)
+{
+	return -FI_ENOSYS;
+}
+
+int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
+		       struct fid_domain **pdomain, void *context)
+{
+	if (!pdomain)
+		return -FI_EINVAL;
+
+	nd_domain_t *nd_domain_ptr = (nd_domain_t*)calloc(1, sizeof(*nd_domain_ptr));
+	if (!nd_domain_ptr)
+		return -FI_ENOMEM;
+
+	nd_domain_ptr->fid.fid = ofi_nd_fid;
+	nd_domain_ptr->fid.ops = &ofi_nd_domain_ops;
+	nd_domain_ptr->fid.mr = &ofi_nd_mr_ops;
+	nd_domain_ptr->ainfo.InfoVersion = ND_VERSION_2;
+
+	struct sockaddr *addr = NULL;
+	int res = ofi_nd_lookup_adapter(info->domain_attr->name,
+				&nd_domain_ptr->adapter, &addr);
+	if (res || !nd_domain_ptr->adapter) {
+		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
+		return res;
+	}
+	memcpy(&nd_domain_ptr->addr, addr, ofi_sizeofaddr(addr));
+
+	HRESULT hr = nd_domain_ptr->adapter->lpVtbl->CreateOverlappedFile(nd_domain_ptr->adapter,
+							   &nd_domain_ptr->adapter_file);
+	if (FAILED(hr))
+	{
+		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
+		return H2F(hr);
+	}
+
+	ULONG len = sizeof(nd_domain_ptr->ainfo);
+	hr = nd_domain_ptr->adapter->lpVtbl->Query(nd_domain_ptr->adapter,
+				&nd_domain_ptr->ainfo, &len);
+	if (FAILED(hr))
+	{
+		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
+		return H2F(hr);
+	}
+
+	*pdomain = &nd_domain_ptr->fid;
+
+	return FI_SUCCESS;
+}
+
+static int ofi_nd_domain_bind(struct fid *fid, struct fid *bfid,
+			      uint64_t flags)
+{
+	return -FI_ENOSYS;
+}
 
 #endif /* _WIN32 */
 
