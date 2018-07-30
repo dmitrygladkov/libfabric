@@ -67,12 +67,37 @@ static struct fi_ops_fabric ofi_nd_fabric_ops = {
 
 static int ofi_nd_fabric_close(fid_t fid)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
+
+typedef struct nd_fabric {
+	struct fid_fabric fab_fid;
+} nd_fabric_t;
 
 int ofi_nd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fab,
 		  void *context)
 {
+	if (!fab)
+		return -FI_EINVAL;
+
+	if (attr)
+	{
+		if (attr->name && strcmp(attr->name, ofi_nd_prov.name))
+			return -FI_EINVAL;
+		if (attr->prov_name && strcmp(attr->prov_name, ofi_nd_prov.name))
+			return -FI_EINVAL;
+		if (attr->prov_version && attr->prov_version != ofi_nd_prov.version)
+			return -FI_EINVAL;
+	}
+
+	nd_fabric_t *nd_fabric_ptr = (nd_fabric_t*)calloc(1, sizeof(*nd_fabric_ptr));
+	if (!nd_fabric_ptr)
+		return -FI_ENOMEM;
+
+	nd_fabric_ptr->fab_fid.fid = ofi_nd_fid;
+	nd_fabric_ptr->fab_fid.ops = &ofi_nd_fabric_ops;
+
+	*fab = &nd_fabric_ptr->fab_fid;
 
 	return FI_SUCCESS;
 }

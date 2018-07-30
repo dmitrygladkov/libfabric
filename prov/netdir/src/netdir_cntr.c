@@ -70,39 +70,39 @@ static struct fi_ops_cntr ofi_nd_cntr_ops = {
 
 static int ofi_nd_cntr_close(struct fid *fid)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 int ofi_nd_cntr_open(struct fid_domain *pdomain, struct fi_cntr_attr *attr,
 		     struct fid_cntr **pcntr, void *context)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 static uint64_t ofi_nd_cntr_read(struct fid_cntr *pcntr)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 static uint64_t ofi_nd_cntr_readerr(struct fid_cntr *pcntr)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 static int ofi_nd_cntr_add(struct fid_cntr *pcntr, uint64_t value)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 static int ofi_nd_cntr_set(struct fid_cntr *pcntr, uint64_t value)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 static int ofi_nd_cntr_wait(struct fid_cntr *pcntr, 
 			    uint64_t threshold, int timeout)
 {
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 #endif /* _WIN32 */

@@ -33,49 +33,25 @@
 #ifdef _WIN32
 
 #include "netdir.h"
+#include "netdir_misc.h"
 
 #include "rdma/fabric.h"
 #include "ofi_util.h"
 
-static int ofi_nd_cq_close(struct fid *fid)
-{
-}
-
+static int ofi_nd_cq_close(struct fid *fid);
 int ofi_nd_cq_open(struct fid_domain *pdomain, struct fi_cq_attr *attr,
-		   struct fid_cq **pcq_fid, void *context)
-{
-}
-
-static ssize_t ofi_nd_cq_read(struct fid_cq *pcq, void *buf, size_t count)
-{
-}
-
+		   struct fid_cq **pcq_fid, void *context);
+static ssize_t ofi_nd_cq_read(struct fid_cq *pcq, void *buf, size_t count);
 static ssize_t ofi_nd_cq_readfrom(struct fid_cq *cq, void *buf, size_t count,
-				  fi_addr_t *src_addr)
-{
-}
-
+				  fi_addr_t *src_addr);
 static ssize_t ofi_nd_cq_readerr(struct fid_cq *pcq, struct fi_cq_err_entry *buf,
-				 uint64_t flags)
-{
-}
-
+				 uint64_t flags);
 static ssize_t ofi_nd_cq_sread(struct fid_cq *pcq, void *buf, size_t count,
-			       const void *cond, int timeout)
-{
-}
-
+			       const void *cond, int timeout);
 static ssize_t ofi_nd_cq_sreadfrom(struct fid_cq *cq, void *buf, size_t count,
-				   fi_addr_t *src_addr, const void *cond,
-				   int timeout)
-{
-}
-
+				   fi_addr_t *src_addr, const void *cond, int timeout);
 static const char *ofi_nd_cq_strerror(struct fid_cq *cq, int prov_errno,
-				      const void *err_data, char *buf,
-				      size_t len)
-{
-}
+				      const void *err_data, char *buf, size_t len);
 
 static struct fi_ops ofi_nd_fi_ops = {
 	.size = sizeof(ofi_nd_fi_ops),
@@ -101,6 +77,72 @@ static struct fi_ops_cq ofi_nd_cq_ops = {
 	.signal = fi_no_cq_signal,
 	.strerror = ofi_nd_cq_strerror
 };
+
+static int ofi_nd_cq_close(struct fid *fid)
+{
+	return -FI_ENOSYS;
+}
+
+int ofi_nd_cq_open(struct fid_domain *pdomain, struct fi_cq_attr *attr,
+		   struct fid_cq **pcq_fid, void *context)
+{
+	if (pdomain->fid.fclass != FI_CLASS_DOMAIN)
+		return -FI_EINVAL;
+
+	if (attr)
+	{
+		if (attr->wait_obj != FI_WAIT_NONE &&
+		    attr->wait_obj != FI_WAIT_UNSPEC)
+			return -FI_EBADFLAGS;
+	}
+
+	nd_cq_t *nd_cq_ptr = (nd_cq_t*)calloc(1, sizeof(*nd_cq_ptr));
+	if (!nd_cq_ptr)
+		return -FI_ENOMEM;
+	nd_cq_ptr->fid.fid = ofi_nd_fid;
+	nd_cq_ptr->fid.ops = &ofi_nd_cq_ops;
+
+	*pcq_fid = &nd_cq_ptr->fid;
+
+	return FI_SUCCESS;
+}
+
+static ssize_t ofi_nd_cq_read(struct fid_cq *pcq, void *buf, size_t count)
+{
+	return -FI_ENOSYS;
+}
+
+static ssize_t ofi_nd_cq_readfrom(struct fid_cq *cq, void *buf, size_t count,
+				  fi_addr_t *src_addr)
+{
+	return -FI_ENOSYS;
+}
+
+static ssize_t ofi_nd_cq_readerr(struct fid_cq *pcq, struct fi_cq_err_entry *buf,
+				 uint64_t flags)
+{
+	return -FI_ENOSYS;
+}
+
+static ssize_t ofi_nd_cq_sread(struct fid_cq *pcq, void *buf, size_t count,
+			       const void *cond, int timeout)
+{
+	return -FI_ENOSYS;
+}
+
+static ssize_t ofi_nd_cq_sreadfrom(struct fid_cq *cq, void *buf, size_t count,
+				   fi_addr_t *src_addr, const void *cond,
+				   int timeout)
+{
+	return -FI_ENOSYS;
+}
+
+static const char *ofi_nd_cq_strerror(struct fid_cq *cq, int prov_errno,
+				      const void *err_data, char *buf,
+				      size_t len)
+{
+	return NULL;
+}
 
 #endif /* _WIN32 */
 
