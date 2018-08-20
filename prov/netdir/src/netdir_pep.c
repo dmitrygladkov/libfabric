@@ -160,16 +160,141 @@ static int ofi_nd_pep_close(struct fid *fid)
 	return -FI_ENOSYS;
 }
 
+typedef struct nd_pep_connreq {
+	OVERLAPPED ov;
+	IND2Connector *connector;
+	void (*event_cb)(struct nd_pep_connreq *, DWORD);
+	void (*error_cb)(struct nd_pep_connreq *, DWORD, DWORD);
+	nd_eq_t *eq;
+	fid_t fid;
+	struct fi_info *info;
+} nd_pep_connreq_t;
+
+void CALLBACK nd_pep_domain_io_cb(DWORD err, DWORD bytes, LPOVERLAPPED ov)
+{
+	nd_pep_connreq_t *connreq_ptr = container_of(ov, nd_pep_connreq_t, ov);
+
+	ND_LOG_DEBUG(FI_LOG_EP_CTRL,
+		"IO callback: err: %s, bytes: %d\n",
+		ofi_nd_error_str(err), bytes);
+
+	if (err)
+	{
+		connreq_ptr->error_cb(connreq_ptr, bytes, err);
+	}
+	else
+	{
+		connreq_ptr->event_cb(connreq_ptr, bytes);
+	}
+}
+
+static inline void ofi_nd_eq_push_err(nd_eq_t *eq, nd_eq_event_t *ev)
+{
+	PostQueuedCompletionStatus(eq->err, 0, 0, &ev->ov);
+	InterlockedIncrement(&eq->count);
+	WakeByAddressAll((void*)&eq->count);
+}
+
+static inline void ofi_nd_eq_push(nd_eq_t *eq, nd_eq_event_t *ev)
+{
+	PostQueuedCompletionStatus(eq->iocp, 0, 0, &ev->ov);
+	InterlockedIncrement(&eq->count);
+	WakeByAddressAll((void*)&eq->count);
+}
+
+static void ofi_nd_pep_connreq(nd_pep_connreq_t *connreq_ptr, DWORD bytes)
+{
+	HRESULT hr = ERROR_SUCCESS;
+	nd_eq_event_t *ev_ptr = (nd_eq_event_t *) calloc(1, sizeof(*ev_ptr));
+	if (!ev_ptr)
+	{
+		ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to allocate event\n");
+		hr = ND_NO_MEMORY;
+
+		nd_eq_event_t *err_ptr = (nd_eq_event_t *) calloc(1, sizeof(*err_ptr));
+		if (!err_ptr)
+		{
+			ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to allocate error\n");
+			return;
+		}
+
+		err_ptr->error.err = -H2F(hr);
+		err_ptr->error.prov_errno = (int)hr;
+		err_ptr->error.fid = connreq_ptr->fid;
+		ofi_nd_eq_push_err(connreq_ptr->eq, err_ptr);
+		/* ofi_nd_pep_connreq_free(&connreq_ptr->base); */
+	}
+	ev_ptr->eq_event = FI_CONNREQ;
+
+	struct fi_eq_cm_entry *cmev = (struct fi_eq_cm_entry*)&ev_ptr->operation;
+	cmev->fid = connreq_ptr->fid;
+	cmev->info = fi_dupinfo(connreq_ptr->info);
+	if (!cmev->info)
+	{
+		ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to copy info\n");
+		hr = ND_NO_MEMORY;
+		/* goto fn_fail; */
+	}
+
+	nd_connreq_t *handle = (nd_connreq_t*) calloc(1, sizeof(*handle));
+	if (!handle)
+	{
+		ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to allocate handle\n");
+		hr = ND_NO_MEMORY;
+		/* goto fn_fail; */
+	}
+
+	handle->handle.fclass = FI_CLASS_CONNREQ;
+	handle->connector = connreq_ptr->connector;
+	handle->connector->lpVtbl->AddRef(handle->connector);
+	cmev->info->handle = &handle->handle;
+
+	ULONG len = 0;
+	hr = connreq_ptr->connector->lpVtbl->GetPrivateData(
+		connreq_ptr->connector, NULL, &len);
+
+	if (FAILED(hr) && hr != ND_BUFFER_OVERFLOW)
+	{
+		ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to get private data\n");
+		/* goto fn_fail_handle; */
+	}
+
+	if (len)
+	{
+		ev_ptr->data = malloc(len);
+		if (!ev_ptr->data)
+		{
+			ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to allocate private data\n");
+			ev_ptr->len = 0;
+			/* goto fn_fail_handle; */
+		}
+
+		hr = connreq_ptr->connector->lpVtbl->GetPrivateData(
+			connreq_ptr->connector, ev_ptr->data, &len);
+		if (FAILED(hr)) {
+			ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to copy private data\n");
+			free(ev_ptr->data);
+			ev_ptr->len = 0;
+			/* goto fn_fail_handle; */
+		}
+	}
+	ev_ptr->len = (size_t)len;
+
+	ofi_nd_eq_push(connreq_ptr->eq, ev_ptr);
+}
+
+static void ofi_nd_pep_connreq_err(nd_pep_connreq_t *connreq_ptr, DWORD bytes, DWORD err)
+{
+}
+
 static int ofi_nd_pep_listen(struct fid_pep *ppep)
 {
-	if (!ppep )
-		return -FI_EINVAL;
-
-	if (ppep->fid.fclass != FI_CLASS_PEP)
+	if (!ppep || ppep->fid.fclass != FI_CLASS_PEP)
 		return -FI_EINVAL;
 
 	nd_pep_t *pep = container_of(ppep, struct nd_pep, fid);
 
+	HRESULT hr = ERROR_SUCCESS;
 	if (!pep->adapter)
 	{
 		struct sockaddr *addr = NULL;
@@ -183,21 +308,17 @@ static int ofi_nd_pep_listen(struct fid_pep *ppep)
 		if (!pep->adapter)
 			return -FI_ENODATA;
 
-
-		HRESULT hr = pep->adapter->lpVtbl->CreateOverlappedFile(pep->adapter,
+		hr = pep->adapter->lpVtbl->CreateOverlappedFile(pep->adapter,
 								&pep->adapter_file);
 		if (FAILED(hr))
 			return H2F(hr);
 		if (pep->adapter_file == INVALID_HANDLE_VALUE)
 			return -FI_ENODATA;
 
-		/* TODO implement domain_io_cb */
-		/* BindIoCompletionCallback(pep->adapter_file, domain_io_cb, 0); */
+		BindIoCompletionCallback(pep->adapter_file, nd_pep_domain_io_cb, 0);
 
 		hr = pep->adapter->lpVtbl->CreateListener(pep->adapter,
-							  &IID_IND2Listener,
-							  pep->adapter_file,
-							  (void**)&pep->listener);
+				&IID_IND2Listener, pep->adapter_file, (void**)&pep->listener);
 		if (FAILED(hr))
 			return H2F(hr);
 		if (!pep->listener)
@@ -217,7 +338,30 @@ static int ofi_nd_pep_listen(struct fid_pep *ppep)
 		if (FAILED(hr))
 			return H2F(hr);
 	}
-	/* TODO add nd_pep_connreq */
+
+	nd_pep_connreq_t *connreq_ptr = (nd_pep_connreq_t*)calloc(1, sizeof(*connreq_ptr));
+	if (!connreq_ptr)
+		return -FI_ENOMEM;
+
+	connreq_ptr->event_cb = ofi_nd_pep_connreq;
+	connreq_ptr->error_cb = ofi_nd_pep_connreq_err; /* placeholder */
+
+	hr = pep->adapter->lpVtbl->CreateConnector(pep->adapter,
+			&IID_IND2Connector, pep->adapter_file, (void**)&connreq_ptr->connector);
+
+	if (FAILED(hr))
+		return H2F(hr);
+
+	connreq_ptr->eq = pep->eq;
+	connreq_ptr->info = pep->info;
+	connreq_ptr->fid = &pep->fid.fid;
+
+	hr = pep->listener->lpVtbl->GetConnectionRequest(pep->listener,
+		(IUnknown*)connreq_ptr->connector, &connreq_ptr->ov);
+
+	if (FAILED(hr))
+		return H2F(hr);
+
 	return FI_SUCCESS;
 }
 

@@ -84,9 +84,29 @@ static inline void ofi_nd_queue_push(nd_queue_t *queue,
 	}
 }
 
+typedef struct nd_eq_event {
+	OVERLAPPED ov;
+	uint32_t eq_event;
+	union {
+		struct fi_eq_entry	operation;
+		/* fi_eq_cm_entry could not be used here because it has
+		   incomplete size */
+		/*struct fi_eq_cm_entry	connection;*/
+		struct fi_eq_err_entry	error;
+	};
+	void *data;
+	size_t len;
+	int is_custom;
+} nd_eq_event_t;
+
+
 typedef struct nd_eq {
 	struct fid_eq fid;
 	volatile LONG count;
+	HANDLE iocp;
+	HANDLE err;
+	CRITICAL_SECTION lock;
+	nd_eq_event_t *peek;
 } nd_eq_t;
 
 typedef struct nd_cq {
@@ -96,6 +116,7 @@ typedef struct nd_cq {
 typedef struct nd_domain {
 	struct fid_domain fid;
 	IND2Adapter *adapter;
+	IND2CompletionQueue *cq;
 	ND2_ADAPTER_INFO ainfo;
 	HANDLE adapter_file;
 	union {
@@ -110,17 +131,21 @@ typedef struct nd_ep {
 	struct fi_info *info;
 	struct nd_eq *eq;
 
-	struct nd_cq *cq_send;
-	struct nd_cq *cq_recv;
+	nd_cq_t *cq_send;
+	nd_cq_t *cq_recv;
 
 	uint64_t send_flags;
 	uint64_t recv_flags;
 	nd_domain_t *domain;
 	IND2Connector *connector;
 	IND2QueuePair *qp;
-	IND2CompletionQueue *cq;
 
 	nd_queue_t prepost;
 } nd_ep_t;
+
+typedef struct nd_connreq {
+	struct fid handle;
+	IND2Connector *connector;
+} nd_connreq_t;
 
 #endif

@@ -85,6 +85,11 @@ static int ofi_nd_domain_close(fid_t fid)
 	return -FI_ENOSYS;
 }
 
+void CALLBACK domain_io_cb(DWORD err, DWORD bytes, LPOVERLAPPED ov)
+{
+    /* TODO implement domain callback */
+}
+
 int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		       struct fid_domain **pdomain, void *context)
 {
@@ -103,7 +108,8 @@ int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 	struct sockaddr *addr = NULL;
 	int res = ofi_nd_lookup_adapter(info->domain_attr->name,
 				&nd_domain_ptr->adapter, &addr);
-	if (res || !nd_domain_ptr->adapter) {
+	if (res || !nd_domain_ptr->adapter)
+	{
 		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
 		return res;
 	}
@@ -117,9 +123,27 @@ int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		return H2F(hr);
 	}
 
+	if (!BindIoCompletionCallback(nd_domain_ptr->adapter_file, domain_io_cb, 0))
+	{
+		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
+		return HRESULT_FROM_WIN32(GetLastError());
+	}
+
 	ULONG len = sizeof(nd_domain_ptr->ainfo);
 	hr = nd_domain_ptr->adapter->lpVtbl->Query(nd_domain_ptr->adapter,
 				&nd_domain_ptr->ainfo, &len);
+
+	if (FAILED(hr))
+	{
+		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
+		return H2F(hr);
+	}
+
+	hr = nd_domain_ptr->adapter->lpVtbl->CreateCompletionQueue(
+		nd_domain_ptr->adapter, &IID_IND2CompletionQueue, nd_domain_ptr->adapter_file,
+		nd_domain_ptr->ainfo.MaxCompletionQueueDepth, 0, 0,
+		(void**)&nd_domain_ptr->cq);
+
 	if (FAILED(hr))
 	{
 		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);

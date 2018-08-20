@@ -113,36 +113,56 @@ int ofi_nd_endpoint(struct fid_domain *pdomain, struct fi_info *info,
 	nd_ep_ptr->domain = domain;
 	nd_ep_ptr->connector = NULL;
 	nd_ep_ptr->qp = NULL;
-	nd_ep_ptr->cq = NULL;
 	nd_ep_ptr->info = fi_dupinfo(info);
 
-	HRESULT hr = nd_ep_ptr->domain->adapter->lpVtbl->CreateConnector(nd_ep_ptr->domain->adapter,
-						&IID_IND2Connector,
-						nd_ep_ptr->domain->adapter_file,
-						(void**)&nd_ep_ptr->connector);
-
-	if (FAILED(hr))
+	/* TODO add critical section */
+	/* Initialzie flow control counter */
+	/*
+	nd_ep_ptr->send_op.used_counter = 0;
+	InitializeCriticalSection(&nd_ep_ptr->send_op.send_lock);
+	*/
+	nd_connreq_t *connreq = 0;
+	if (info->handle)
 	{
-		ofi_nd_ep_close(&nd_ep_ptr->fid.fid);
-		return H2F(hr);
+		if (info->handle->fclass != FI_CLASS_CONNREQ)
+			return -FI_EINVAL;
+
+		connreq = container_of(info->handle, nd_connreq_t, handle);
 	}
 
-	hr = nd_ep_ptr->connector->lpVtbl->Bind(nd_ep_ptr->connector,
-					 &nd_ep_ptr->domain->addr.addr,
-					 (ULONG)ofi_sizeofaddr(&nd_ep_ptr->domain->addr.addr));
-	if (FAILED(hr))
+	HRESULT hr = ERROR_SUCCESS;
+	if (connreq)
 	{
-		ofi_nd_ep_close(&nd_ep_ptr->fid.fid);
-		return H2F(hr);
+		nd_ep_ptr->connector = connreq->connector;
+		/* not clear, what must be freed here */
+		/* ND_BUF_FREE(nd_connreq, connreq); */
+		nd_ep_ptr->fid.cm->accept = ofi_nd_ep_accept;
 	}
+	else
+	{
+		hr = nd_ep_ptr->domain->adapter->lpVtbl->CreateConnector(nd_ep_ptr->domain->adapter,
+							&IID_IND2Connector,
+							nd_ep_ptr->domain->adapter_file,
+							(void**)&nd_ep_ptr->connector);
 
-	nd_ep_ptr->fid.cm->connect = ofi_nd_ep_connect;
+		if (FAILED(hr))
+		{
+			ofi_nd_ep_close(&nd_ep_ptr->fid.fid);
+			return H2F(hr);
+		}
 
-	hr = nd_ep_ptr->domain->adapter->lpVtbl->CreateCompletionQueue(
-		nd_ep_ptr->domain->adapter, &IID_IND2CompletionQueue,
-		nd_ep_ptr->domain->adapter_file,
-		nd_ep_ptr->domain->ainfo.MaxCompletionQueueDepth, 0, 0,
-		(void**)&nd_ep_ptr->cq);
+		hr = nd_ep_ptr->connector->lpVtbl->Bind(nd_ep_ptr->connector,
+						 &nd_ep_ptr->domain->addr.addr,
+						 (ULONG)ofi_sizeofaddr(&nd_ep_ptr->domain->addr.addr));
+		if (FAILED(hr))
+		{
+			ofi_nd_ep_close(&nd_ep_ptr->fid.fid);
+			return H2F(hr);
+		}
+
+		nd_ep_ptr->fid.cm->connect = ofi_nd_ep_connect;
+
+	}
 
 	if (FAILED(hr))
 	{
@@ -158,6 +178,7 @@ int ofi_nd_endpoint(struct fid_domain *pdomain, struct fi_info *info,
 static int ofi_nd_ep_control(struct fid *fid, int command, void *arg)
 {
 	int ofi_nd_ep_control_enter = 0;
+
 	if (fid->fclass != FI_CLASS_EP || command != FI_ENABLE)
 		return -FI_EINVAL;
 
@@ -167,8 +188,8 @@ static int ofi_nd_ep_control(struct fid *fid, int command, void *arg)
 
 	HRESULT hr = nd_ep_ptr->domain->adapter->lpVtbl->CreateQueuePair(
 		nd_ep_ptr->domain->adapter, &IID_IND2QueuePair,
-		(IUnknown*)nd_ep_ptr->cq,
-		(IUnknown*)nd_ep_ptr->cq,
+		(IUnknown*)nd_ep_ptr->domain->cq,
+		(IUnknown*)nd_ep_ptr->domain->cq,
 		nd_ep_ptr,
 		nd_ep_ptr->domain->ainfo.MaxReceiveQueueDepth,
 		nd_ep_ptr->domain->ainfo.MaxInitiatorQueueDepth,
@@ -187,15 +208,60 @@ static int ofi_nd_ep_close(struct fid *fid)
 	return -FI_ENOSYS;
 }
 
+typedef struct nd_ep_connect {
+	OVERLAPPED ov;
+} nd_ep_connect_t;
+
 static int ofi_nd_ep_connect(struct fid_ep *pep, const void *addr,
 			     const void *param, size_t paramlen)
 {
-	return -FI_ENOSYS;
+	if (pep->fid.fclass != FI_CLASS_EP || !addr)
+		return -FI_EINVAL;
+
+	nd_ep_t *ep_ptr = container_of(pep, nd_ep_t, fid);
+
+	int res = fi_enable(&ep_ptr->fid);
+	if (res)
+		return res;
+
+	nd_ep_connect_t *wait = (nd_ep_connect_t*) calloc(1, sizeof(*wait));
+	if (!wait)
+		return -FI_ENOMEM;
+
+	ep_ptr->connector->lpVtbl->AddRef(ep_ptr->connector);
+
+	HRESULT hr = ep_ptr->connector->lpVtbl->Connect(
+		ep_ptr->connector, (IUnknown*)ep_ptr->qp,
+		(struct sockaddr*)addr, (ULONG)ofi_sizeofaddr((struct sockaddr*)addr),
+		ep_ptr->domain->ainfo.MaxInboundReadLimit,
+		ep_ptr->domain->ainfo.MaxOutboundReadLimit,
+		param, (ULONG)paramlen, &wait->ov);
+
+	return H2F(hr);
 }
 
 static int ofi_nd_ep_accept(struct fid_ep *pep, const void *param, size_t paramlen)
 {
-	return -FI_ENOSYS;
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	int res = fi_enable(&ep->fid);
+	if (res)
+		return res;
+
+	nd_ep_connect_t *accept = (nd_ep_connect_t*) calloc(1, sizeof(*accept));
+	if (!accept)
+		return -FI_ENOMEM;
+
+	ND_LOG_DEBUG(FI_LOG_EP_CTRL, "sending accept message\n");
+
+	HRESULT hr = ep->connector->lpVtbl->Accept(
+		ep->connector, (IUnknown*)ep->qp,
+		ep->domain->ainfo.MaxInboundReadLimit,
+		ep->domain->ainfo.MaxOutboundReadLimit,
+		param, (ULONG)paramlen, &accept->ov);
+	if (FAILED(hr))
+		ND_LOG_WARN(FI_LOG_EP_CTRL, "failed to send accept message: %x\n", hr);
+
+	return H2F(hr);
 }
 
 static int ofi_nd_ep_getname(fid_t fid, void *addr, size_t *addrlen)
