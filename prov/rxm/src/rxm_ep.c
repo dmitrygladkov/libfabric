@@ -1092,7 +1092,7 @@ rxm_ep_fill_tx_inject_buf(struct rxm_ep *rxm_ep, const void *buf, size_t len,
 {
 	tx_buf->pkt.hdr.op = op;
 	tx_buf->pkt.hdr.flags |= comp_flags;
-	memcpy(tx_buf->pkt.data, buf, tx_buf->pkt.hdr.size);
+	ofi_memcpy(tx_buf->pkt.data, buf, tx_buf->pkt.hdr.size);
 }
 
 static inline ssize_t

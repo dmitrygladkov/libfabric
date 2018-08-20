@@ -397,12 +397,69 @@ void util_buf_pool_destroy(struct util_buf_pool *pool);
 
 
 /*
+ * Optimized memcpy implementation
+ */
+
+/* Copy only the first 8 bytes */
+static inline void
+ofi_memcpy64(uint64_t *dst64, const uint64_t *src64, size_t size)
+{
+	uint32_t *dst32, *src32;
+	uint8_t *dst8, *src8;
+
+	switch (size) {
+	case 8:
+		*dst64++ = *src64++;
+		return;
+	case 7:
+	case 6:
+	case 5:
+	case 4:
+		dst32 = (uint32_t *)dst64;
+		src32 = (uint32_t *)src64;
+		*dst32++ = *src32++;
+		size -= 4;
+		break;
+	case 3:
+	case 2:
+	case 1:
+		break;
+	default:
+		return;
+	}
+
+	dst8 = (uint8_t *)dst64;
+	src8 = (uint8_t *)src64;
+	switch (size) {
+	case 3:
+		*dst8++ = *src8++;
+	case 2:
+		*dst8++ = *src8++;
+	case 1:
+		*dst8++ = *src8++;
+	}
+}
+
+static inline void ofi_memcpy(void *dst, const void *src, size_t size)
+{
+	if (size <= 64) {
+		int i;
+		for (i = 0; i < size / 8; i++)
+			ofi_memcpy64(&((uint64_t *)dst)[i],
+				     &((uint64_t *)src)[i], 8);
+		ofi_memcpy64(&((uint64_t *)dst)[i],
+			     &((uint64_t *)src)[i], size % 8);
+	} else {
+		memcpy(dst, src, size);
+	}
+}
+
+/*
  * Persistent memory support
  */
 void ofi_pmem_init(void);
 
 extern uint64_t OFI_RMA_PMEM;
 extern void (*ofi_pmem_commit)(const void *addr, size_t len);
-
 
 #endif /* _OFI_MEM_H_ */

@@ -57,9 +57,9 @@ uint64_t ofi_copy_iov_buf(const struct iovec *iov, size_t iov_count, uint64_t io
 
 		len = MIN(len, bufsize);
 		if (dir == OFI_COPY_BUF_TO_IOV)
-			memcpy(iov_buf, (char *) buf + done, len);
+			ofi_memcpy(iov_buf, (char *) buf + done, len);
 		else if (dir == OFI_COPY_IOV_TO_BUF)
-			memcpy((char *) buf + done, iov_buf, len);
+			ofi_memcpy((char *) buf + done, iov_buf, len);
 
 		iov_offset = 0;
 		bufsize -= len;

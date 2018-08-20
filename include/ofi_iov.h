@@ -75,7 +75,7 @@ ofi_copy_to_iov(const struct iovec *iov, size_t iov_count, uint64_t iov_offset,
 		uint64_t size = ((iov_offset > iov[0].iov_len) ?
 				 0 : MIN(bufsize, iov[0].iov_len - iov_offset));
 
-		memcpy((char *)iov[0].iov_base + iov_offset, buf, size);
+		ofi_memcpy((char *)iov[0].iov_base + iov_offset, buf, size);
 		return size;
 	} else {
 		return ofi_copy_iov_buf(iov, iov_count, iov_offset, buf, bufsize,
