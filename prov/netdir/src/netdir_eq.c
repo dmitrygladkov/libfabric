@@ -92,6 +92,22 @@ int ofi_nd_eq_open(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 	nd_eq_ptr->fid.ops = &ofi_nd_eq_ops;
 	nd_eq_ptr->count = 0;
 
+	InitializeCriticalSection(&nd_eq_ptr->lock);
+
+	nd_eq_ptr->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	if (!nd_eq_ptr->iocp || nd_eq_ptr->iocp == INVALID_HANDLE_VALUE)
+	{
+		ofi_nd_eq_close(&nd_eq_ptr->fid.fid);
+		return H2F(HRESULT_FROM_WIN32(GetLastError()));
+	}
+
+	nd_eq_ptr->err = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	if (!nd_eq_ptr->err || nd_eq_ptr->err == INVALID_HANDLE_VALUE)
+	{
+		ofi_nd_eq_close(&nd_eq_ptr->fid.fid);
+		return H2F(HRESULT_FROM_WIN32(GetLastError()));
+	}
+
 	*peq = &nd_eq_ptr->fid;
 
 	return FI_SUCCESS;
@@ -99,6 +115,16 @@ int ofi_nd_eq_open(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 
 static int ofi_nd_eq_close(struct fid *fid)
 {
+	nd_eq_t *eq_ptr = container_of(fid, nd_eq_t, fid.fid);
+
+	if (eq_ptr->iocp && eq_ptr->iocp != INVALID_HANDLE_VALUE)
+		CloseHandle(eq_ptr->iocp);
+	if (eq_ptr->err && eq_ptr->err != INVALID_HANDLE_VALUE)
+		CloseHandle(eq_ptr->err);
+
+	DeleteCriticalSection(&eq_ptr->lock);
+
+	free(eq_ptr);
 	return FI_SUCCESS;
 }
 
@@ -114,22 +140,131 @@ static ssize_t ofi_nd_eq_readerr(struct fid_eq *peq,
 	return -FI_ENOSYS;
 }
 
+static inline ssize_t ofi_nd_eq_ev2buf(nd_eq_event_t *ev,
+				       void *buf, size_t len)
+{
+	size_t copylen = 0;
+	char* dst = (char *)buf;
+
+	if (!ev->is_custom)
+	{
+		switch (ev->eq_event)
+		{
+		case FI_CONNREQ:
+		case FI_CONNECTED:
+		case FI_SHUTDOWN:
+			copylen = min(sizeof(struct fi_eq_cm_entry), len);
+			break;
+		case FI_AV_COMPLETE:
+		case FI_MR_COMPLETE:
+			copylen = min(sizeof(struct fi_eq_entry), len);
+			break;
+		default:
+			ND_LOG_WARN(FI_LOG_EQ, "unknown event type: %d\n",
+				   ev->eq_event);
+			copylen = min(sizeof(struct fi_eq_entry), len);
+			break;
+		}
+	}
+
+	if (copylen)
+		memcpy(dst, &ev->operation, copylen);
+
+	if (ev->len)
+	{
+		assert(ev->data);
+		if (len > copylen)
+		{
+			dst += copylen;
+			memcpy(dst, ev->data, min(len - copylen, ev->len));
+			copylen += min(len - copylen, ev->len);
+		}
+	}
+	return (ssize_t)copylen;
+}
+
 static ssize_t ofi_nd_eq_sread(struct fid_eq *peq, uint32_t *pev,
 			       void *buf, size_t len, int timeout,
 			       uint64_t flags)
 {
 	nd_eq_t *nd_eq_ptr = container_of(peq, struct nd_eq, fid);
-	nd_eq_ptr->count = 0;
-	while (!nd_eq_ptr->count) {
-		LONG zero = 0;
-		if (!WaitOnAddress(
-			&nd_eq_ptr->count, &zero, sizeof(nd_eq_ptr->count),
-			(DWORD)timeout) && timeout >= 0)
-			return -FI_EAGAIN;
+	ssize_t res = 0;
+	int retry = 1;
+	while(retry)
+	{
+		nd_eq_ptr->count = 0;
+		while (!nd_eq_ptr->count)
+		{
+			LONG zero = 0;
+			if (!WaitOnAddress(
+				&nd_eq_ptr->count, &zero, sizeof(nd_eq_ptr->count),
+				(DWORD)timeout) && timeout >= 0)
+				return -FI_EAGAIN;
+		}
+
+		/* we have to use critical section here because concurrent thread
+		may read event with FI_PEEK flag */
+		EnterCriticalSection(&nd_eq_ptr->lock);
+
+		if (!nd_eq_ptr->count)
+		{
+			retry = 1;
+			LeaveCriticalSection(&nd_eq_ptr->lock);
+			if (timeout >= 0)
+				return -FI_EAGAIN;
+		}
+		else
+		{
+			retry = 0;
+		}
 	}
-	int server_finally_read_something = 0;
-	assert(server_finally_read_something);
-	return FI_SUCCESS;
+
+	/* if there is peeked item - use it, else - try to read from queue */
+	DWORD bytes = 0;
+	ULONG_PTR key = 0;
+	OVERLAPPED *ov = 0;
+	nd_eq_event_t *ev = 0;
+	if (nd_eq_ptr->peek)
+	{
+		ev = nd_eq_ptr->peek;
+	}
+	else
+	{
+		assert(nd_eq_ptr->iocp);
+		if (GetQueuedCompletionStatus(
+			nd_eq_ptr->iocp, &bytes, &key, &ov, 0))
+		{
+			ev = container_of(ov, struct nd_eq_event, ov);
+		}
+	}
+
+	/* in case if no event available, but counter is non-zero - error available */
+	if (!ev && nd_eq_ptr->count)
+	{
+		res = -FI_EAVAIL;
+		LeaveCriticalSection(&nd_eq_ptr->lock);
+		return res;
+	}
+
+	res = ofi_nd_eq_ev2buf(ev, buf, len);
+	*pev = ev->eq_event;
+
+	if (flags & FI_PEEK)
+	{
+		nd_eq_ptr->peek = ev;
+		/* we updated peek ptr, notify other waiters about this */
+		WakeByAddressAll((void*)&nd_eq_ptr->count);
+	}
+	else
+	{
+		nd_eq_ptr->peek = NULL;
+		InterlockedDecrement(&nd_eq_ptr->count);
+		assert(nd_eq_ptr->count >= 0);
+	}
+
+	LeaveCriticalSection(&nd_eq_ptr->lock);
+
+	return res;
 }
 
 static const char *ofi_nd_eq_strerror(struct fid_eq *eq, int prov_errno,
