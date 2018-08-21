@@ -979,14 +979,6 @@ static int rxm_cq_close(struct fid *fid)
 	return retv;
 }
 
-static struct fi_ops rxm_cq_fi_ops = {
-	.size = sizeof(struct fi_ops),
-	.close = rxm_cq_close,
-	.bind = fi_no_bind,
-	.control = fi_no_control,
-	.ops_open = fi_no_ops_open,
-};
-
 static struct fi_ops_cq rxm_cq_ops = {
 	.size = sizeof(struct fi_ops_cq),
 	.read = ofi_cq_read,
@@ -1014,8 +1006,8 @@ int rxm_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		goto err1;
 
 	*cq_fid = &util_cq->cq_fid;
-	/* Override util_cq_fi_ops */
-	(*cq_fid)->fid.ops = &rxm_cq_fi_ops;
+	/* Override util_cq_fi_ops::close */
+	(*cq_fid)->fid.ops->close = rxm_cq_close;
 	(*cq_fid)->ops = &rxm_cq_ops;
 	return 0;
 err1:
