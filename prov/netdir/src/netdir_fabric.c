@@ -65,14 +65,20 @@ static struct fi_ops_fabric ofi_nd_fabric_ops = {
 	.trywait = fi_no_trywait
 };
 
-static int ofi_nd_fabric_close(fid_t fid)
-{
-	return -FI_ENOSYS;
-}
-
 typedef struct nd_fabric {
 	struct fid_fabric fab_fid;
 } nd_fabric_t;
+
+static int ofi_nd_fabric_close(fid_t fid)
+{
+	nd_fabric_t *fabric;
+	fabric = container_of(fid, nd_fabric_t, fab_fid.fid);
+	free(fabric);
+	/* due to issues in cleanup NetworkDirect on library
+	   unload make cleaning here, on fabric close */
+	ofi_nd_shutdown();
+	return FI_SUCCESS;
+}
 
 int ofi_nd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fab,
 		  void *context)

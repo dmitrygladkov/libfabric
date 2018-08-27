@@ -38,6 +38,8 @@
 #include "rdma/fi_domain.h"
 #include "rdma/fi_endpoint.h"
 
+#include "ofi_list.h"
+
 typedef struct nd_queue_item {
 	struct nd_queue_item	*next;
 } nd_queue_item_t;
@@ -107,14 +109,26 @@ typedef struct nd_eq {
 	HANDLE err;
 	CRITICAL_SECTION lock;
 	nd_eq_event_t *peek;
+	void* errdata;
 } nd_eq_t;
 
 typedef struct nd_cq {
 	struct fid_cq fid;
+	enum fi_cq_format format;
+	HANDLE iocp;
+	HANDLE err;
+	volatile LONG count;
 } nd_cq_t;
+
+typedef struct nd_event_base {
+	OVERLAPPED ov;
+	void (*event_cb)(struct nd_event_base *, DWORD);
+	void (*error_cb)(struct nd_event_base *, DWORD, DWORD);
+} nd_event_base_t;
 
 typedef struct nd_domain {
 	struct fid_domain fid;
+	struct fi_info *info;
 	IND2Adapter *adapter;
 	IND2CompletionQueue *cq;
 	ND2_ADAPTER_INFO ainfo;
@@ -124,6 +138,10 @@ typedef struct nd_domain {
 		struct sockaddr_in addr4;
 		struct sockaddr_in6 addr6;
 	} addr;
+	nd_event_base_t base;
+	struct dlist_entry ep_list;
+	nd_eq_t *eq;
+	uint64_t eq_flags;
 } nd_domain_t;
 
 typedef struct nd_ep {
@@ -147,5 +165,73 @@ typedef struct nd_connreq {
 	struct fid handle;
 	IND2Connector *connector;
 } nd_connreq_t;
+
+void CALLBACK domain_io_cb(DWORD err, DWORD bytes, LPOVERLAPPED ov);
+static inline void ofi_nd_eq_push_err(nd_eq_t *eq, nd_eq_event_t *ev)
+{
+	PostQueuedCompletionStatus(eq->err, 0, 0, &ev->ov);
+	InterlockedIncrement(&eq->count);
+	WakeByAddressAll((void*)&eq->count);
+}
+
+static inline void ofi_nd_eq_push(nd_eq_t *eq, nd_eq_event_t *ev)
+{
+	PostQueuedCompletionStatus(eq->iocp, 0, 0, &ev->ov);
+	InterlockedIncrement(&eq->count);
+	WakeByAddressAll((void*)&eq->count);
+}
+
+typedef struct nd_flow_cntrl_flags {
+	unsigned req_ack : 1;
+	unsigned ack : 1;
+	unsigned empty : 1;
+} nd_flow_cntrl_flags_t;
+
+typedef struct nd_msgheader {
+	uint64_t data;
+	enum ofi_nd_cq_event event;
+	nd_flow_cntrl_flags_t flags;
+	size_t location_cnt;
+} nd_msgheader_t;
+
+typedef struct nd_msgprefix {
+	UINT32 token;
+	nd_msgheader_t header;
+} nd_msgprefix_t;
+
+typedef struct nd_inlinebuf {
+	UINT32			token;
+	void*			buffer;
+} nd_inlinebuf_t;
+
+typedef struct nd_cq_entry {
+	nd_event_base_t base;
+	void* buf;
+	size_t len;
+	uint64_t data;
+	uint64_t flags;
+	struct nd_domain *domain;
+	void* context;
+	size_t iov_cnt;
+	struct iovec iov[ND_MSG_IOV_LIMIT];
+	/* uint64_t seq; */
+	nd_queue_item_t queue_item;
+	nd_msgprefix_t *prefix;
+	nd_inlinebuf_t *inline_buf;
+	size_t mr_count;
+	IND2MemoryRegion *mr[ND_MSG_IOV_LIMIT];
+	ND2_RESULT result;
+
+	struct {
+		/* these parameters are specified in
+		 * parent's CQ entry to wait until all
+		 * read/write operation will be completed */
+		size_t comp_count;
+		size_t total_count;
+
+		CRITICAL_SECTION comp_lock;
+	} wait_completion;
+	struct nd_cq_entry *aux_entry;
+} nd_cq_entry_t;
 
 #endif
