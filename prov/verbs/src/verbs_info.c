@@ -499,6 +499,7 @@ static int fi_ibv_get_device_attrs(struct ibv_context *ctx,
 	}
 
 	info->domain_attr->cq_cnt 		= device_attr.max_cq;
+	info->domain_attr->cq_size 		= device_attr.max_cqe;
 	info->domain_attr->ep_cnt 		= device_attr.max_qp;
 	info->domain_attr->tx_ctx_cnt 		= MIN(info->domain_attr->tx_ctx_cnt,
 						      device_attr.max_qp);

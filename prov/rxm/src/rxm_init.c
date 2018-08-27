@@ -38,8 +38,8 @@
 #include <ofi_prov.h>
 #include "rxm.h"
 
-size_t rxm_msg_tx_size		= 128;
-size_t rxm_msg_rx_size		= 128;
+size_t rxm_msg_tx_size		= 384;
+size_t rxm_msg_rx_size		= 384;
 size_t rxm_def_univ_size	= 256;
 
 char *rxm_proto_state_str[] = {
@@ -149,6 +149,7 @@ int rxm_info_to_rxm(uint32_t version, const struct fi_info *core_info,
 	info->domain_attr->cq_data_size = MIN(core_info->domain_attr->cq_data_size,
 					      rxm_info.domain_attr->cq_data_size);
 	info->domain_attr->mr_key_size = core_info->domain_attr->mr_key_size;
+	info->domain_attr->cq_size = rxm_info.domain_attr->cq_size;
 
 	return 0;
 }

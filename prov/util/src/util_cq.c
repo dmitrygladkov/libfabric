@@ -518,6 +518,9 @@ static int fi_cq_init(struct fid_domain *domain, struct fi_cq_attr *attr,
 	cq->cq_fid.fid.fclass = FI_CLASS_CQ;
 	cq->cq_fid.fid.context = context;
 
+	if (attr->size > cq->domain->cq_size)
+		return -FI_EINVAL;
+
 	switch (attr->wait_obj) {
 	case FI_WAIT_NONE:
 		wait = NULL;

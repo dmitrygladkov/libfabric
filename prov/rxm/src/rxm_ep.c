@@ -1733,6 +1733,8 @@ static int rxm_ep_msg_cq_open(struct rxm_ep *rxm_ep, enum fi_wait_obj wait_obj)
 
 	cq_attr.size = (rxm_ep->msg_info->tx_attr->size +
 			rxm_ep->msg_info->rx_attr->size) * rxm_def_univ_size;
+	if (cq_attr.size > rxm_ep->msg_info->domain_attr->cq_size)
+		cq_attr.size = rxm_ep->msg_info->domain_attr->cq_size;
 	cq_attr.format = FI_CQ_FORMAT_DATA;
 	cq_attr.wait_obj = wait_obj;
 

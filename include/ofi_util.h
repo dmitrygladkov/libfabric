@@ -197,6 +197,7 @@ struct util_domain {
 	enum fi_av_type		av_type;
 	struct ofi_mr_map	mr_map;
 	enum fi_threading	threading;
+	size_t			cq_size;
 };
 
 int ofi_domain_init(struct fid_fabric *fabric_fid, const struct fi_info *info,

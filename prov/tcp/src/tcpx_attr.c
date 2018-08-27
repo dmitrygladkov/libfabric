@@ -84,7 +84,8 @@ static struct fi_domain_attr tcpx_domain_attr = {
 	.tx_ctx_cnt = 8192,
 	.rx_ctx_cnt = 8192,
 	.max_ep_tx_ctx = 1,
-	.max_ep_rx_ctx = 1
+	.max_ep_rx_ctx = 1,
+	.cq_size = 2048,
 };
 
 static struct fi_fabric_attr tcpx_fabric_attr = {

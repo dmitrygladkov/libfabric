@@ -38,6 +38,9 @@
 
 #define RXM_DOMAIN_CAPS (FI_LOCAL_COMM | FI_REMOTE_COMM)
 
+#define RXM_TX_ATRR_SIZE	1024
+#define RXM_RX_ATRR_SIZE	1024
+
 /* Since we are a layering provider, the attributes for which we rely on the
  * core provider are set to full capability. This ensures that ofix_getinfo
  * check hints succeeds and the core provider can accept / reject any capability
@@ -47,7 +50,7 @@ struct fi_tx_attr rxm_tx_attr = {
 	.caps = RXM_EP_CAPS,
 	.msg_order = ~0x0ULL,
 	.comp_order = FI_ORDER_NONE,
-	.size = 1024,
+	.size = RXM_TX_ATRR_SIZE,
 	.iov_limit = RXM_IOV_LIMIT,
 	.rma_iov_limit = RXM_IOV_LIMIT,
 };
@@ -56,7 +59,7 @@ struct fi_rx_attr rxm_rx_attr = {
 	.caps = RXM_EP_CAPS | FI_MULTI_RECV,
 	.msg_order = ~0x0ULL,
 	.comp_order = FI_ORDER_NONE,
-	.size = 1024,
+	.size = RXM_RX_ATRR_SIZE,
 	.iov_limit= RXM_IOV_LIMIT,
 };
 
@@ -92,6 +95,7 @@ struct fi_domain_attr rxm_domain_attr = {
 	.max_ep_tx_ctx = 1,
 	.max_ep_rx_ctx = 1,
 	.mr_iov_limit = 1,
+	.cq_size = (RXM_TX_ATRR_SIZE + RXM_RX_ATRR_SIZE),
 };
 
 struct fi_fabric_attr rxm_fabric_attr = {
