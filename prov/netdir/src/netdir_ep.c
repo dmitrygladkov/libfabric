@@ -251,6 +251,16 @@ static int ofi_nd_ep_accept(struct fid_ep *pep, const void *param, size_t paraml
 	if (!accept)
 		return -FI_ENOMEM;
 
+	/*
+	accept->ep = ep;
+	accept->eq = ep->eq;
+	accept->connector = ep->connector;
+	accept->base.event_cb = ofi_nd_ep_accepted;
+	accept->base.err_cb = ofi_nd_ep_rejected;
+	accept->base.free = ofi_nd_ep_accepted_free;
+	accept->connector->lpVtbl->AddRef(accept->connector);
+	*/
+
 	ND_LOG_DEBUG(FI_LOG_EP_CTRL, "sending accept message\n");
 
 	HRESULT hr = ep->connector->lpVtbl->Accept(

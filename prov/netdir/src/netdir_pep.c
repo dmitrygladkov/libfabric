@@ -157,54 +157,49 @@ static int ofi_nd_pep_getname(fid_t fid, void *addr, size_t *addrlen)
 
 static int ofi_nd_pep_close(struct fid *fid)
 {
-	return -FI_ENOSYS;
+	nd_pep_t *pep = container_of(fid, nd_pep_t, fid.fid);
+
+	int ref = 0;
+	if (pep->listener)
+	{
+		ref = (int)pep->listener->lpVtbl->Release(pep->listener);
+	}
+	if (pep->adapter)
+	{
+		ref = (int)pep->adapter->lpVtbl->Release(pep->adapter);
+	}
+
+	if (pep->adapter_file && pep->adapter_file != INVALID_HANDLE_VALUE)
+		CloseHandle(pep->adapter_file);
+
+	if (pep->info)
+		fi_freeinfo(pep->info);
+
+	free(pep);
+
+	return FI_SUCCESS;
 }
 
 typedef struct nd_pep_connreq {
-	OVERLAPPED ov;
+	nd_event_base_t base;
 	IND2Connector *connector;
-	void (*event_cb)(struct nd_pep_connreq *, DWORD);
-	void (*error_cb)(struct nd_pep_connreq *, DWORD, DWORD);
 	nd_eq_t *eq;
 	fid_t fid;
 	struct fi_info *info;
 } nd_pep_connreq_t;
 
-void CALLBACK nd_pep_domain_io_cb(DWORD err, DWORD bytes, LPOVERLAPPED ov)
+static void ofi_nd_pep_connreq_free(nd_event_base_t *base)
 {
-	nd_pep_connreq_t *connreq_ptr = container_of(ov, nd_pep_connreq_t, ov);
-
-	ND_LOG_DEBUG(FI_LOG_EP_CTRL,
-		"IO callback: err: %s, bytes: %d\n",
-		ofi_nd_error_str(err), bytes);
-
-	if (err)
-	{
-		connreq_ptr->error_cb(connreq_ptr, bytes, err);
-	}
-	else
-	{
-		connreq_ptr->event_cb(connreq_ptr, bytes);
-	}
+	nd_pep_connreq_t *connreq = container_of(base, nd_pep_connreq_t, base);
+	if (connreq->connector)
+		connreq->connector->lpVtbl->Release(connreq->connector);
+	free(connreq);
 }
 
-static inline void ofi_nd_eq_push_err(nd_eq_t *eq, nd_eq_event_t *ev)
-{
-	PostQueuedCompletionStatus(eq->err, 0, 0, &ev->ov);
-	InterlockedIncrement(&eq->count);
-	WakeByAddressAll((void*)&eq->count);
-}
-
-static inline void ofi_nd_eq_push(nd_eq_t *eq, nd_eq_event_t *ev)
-{
-	PostQueuedCompletionStatus(eq->iocp, 0, 0, &ev->ov);
-	InterlockedIncrement(&eq->count);
-	WakeByAddressAll((void*)&eq->count);
-}
-
-static void ofi_nd_pep_connreq(nd_pep_connreq_t *connreq_ptr, DWORD bytes)
+static void ofi_nd_pep_connreq(nd_event_base_t *base_ptr, DWORD bytes)
 {
 	HRESULT hr = ERROR_SUCCESS;
+	nd_pep_connreq_t *connreq_ptr = container_of(base_ptr, nd_pep_connreq_t, base);
 	nd_eq_event_t *ev_ptr = (nd_eq_event_t *) calloc(1, sizeof(*ev_ptr));
 	if (!ev_ptr)
 	{
@@ -222,7 +217,7 @@ static void ofi_nd_pep_connreq(nd_pep_connreq_t *connreq_ptr, DWORD bytes)
 		err_ptr->error.prov_errno = (int)hr;
 		err_ptr->error.fid = connreq_ptr->fid;
 		ofi_nd_eq_push_err(connreq_ptr->eq, err_ptr);
-		/* ofi_nd_pep_connreq_free(&connreq_ptr->base); */
+		ofi_nd_pep_connreq_free(&connreq_ptr->base);
 	}
 	ev_ptr->eq_event = FI_CONNREQ;
 
@@ -281,9 +276,10 @@ static void ofi_nd_pep_connreq(nd_pep_connreq_t *connreq_ptr, DWORD bytes)
 	ev_ptr->len = (size_t)len;
 
 	ofi_nd_eq_push(connreq_ptr->eq, ev_ptr);
+	ofi_nd_pep_connreq_free(&connreq_ptr->base);
 }
 
-static void ofi_nd_pep_connreq_err(nd_pep_connreq_t *connreq_ptr, DWORD bytes, DWORD err)
+static void ofi_nd_pep_connreq_err(nd_event_base_t *base_ptr, DWORD bytes, DWORD err)
 {
 }
 
@@ -315,7 +311,7 @@ static int ofi_nd_pep_listen(struct fid_pep *ppep)
 		if (pep->adapter_file == INVALID_HANDLE_VALUE)
 			return -FI_ENODATA;
 
-		BindIoCompletionCallback(pep->adapter_file, nd_pep_domain_io_cb, 0);
+		BindIoCompletionCallback(pep->adapter_file, domain_io_cb, 0);
 
 		hr = pep->adapter->lpVtbl->CreateListener(pep->adapter,
 				&IID_IND2Listener, pep->adapter_file, (void**)&pep->listener);
@@ -343,8 +339,8 @@ static int ofi_nd_pep_listen(struct fid_pep *ppep)
 	if (!connreq_ptr)
 		return -FI_ENOMEM;
 
-	connreq_ptr->event_cb = ofi_nd_pep_connreq;
-	connreq_ptr->error_cb = ofi_nd_pep_connreq_err; /* placeholder */
+	connreq_ptr->base.event_cb = ofi_nd_pep_connreq;
+	connreq_ptr->base.error_cb = ofi_nd_pep_connreq_err; /* placeholder */
 
 	hr = pep->adapter->lpVtbl->CreateConnector(pep->adapter,
 			&IID_IND2Connector, pep->adapter_file, (void**)&connreq_ptr->connector);
@@ -357,7 +353,7 @@ static int ofi_nd_pep_listen(struct fid_pep *ppep)
 	connreq_ptr->fid = &pep->fid.fid;
 
 	hr = pep->listener->lpVtbl->GetConnectionRequest(pep->listener,
-		(IUnknown*)connreq_ptr->connector, &connreq_ptr->ov);
+		(IUnknown*)connreq_ptr->connector, &connreq_ptr->base.ov);
 
 	if (FAILED(hr))
 		return H2F(hr);
@@ -379,13 +375,39 @@ static int ofi_nd_pep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 static int ofi_nd_pep_reject(struct fid_pep *ppep, fid_t handle,
 			     const void *param, size_t paramlen)
 {
-	return -FI_ENOSYS;
+	if (ppep->fid.fclass != FI_CLASS_PEP)
+		return -FI_EINVAL;
+
+	if (handle->fclass != FI_CLASS_CONNREQ)
+		return -FI_EINVAL;
+
+	nd_connreq_t *connreq = container_of(handle, nd_connreq_t, handle);
+
+	connreq->connector->lpVtbl->Reject(connreq->connector, param,
+					   (ULONG)paramlen);
+
+	connreq->connector->lpVtbl->Release(connreq->connector);
+
+	free(connreq);
+
+	return FI_SUCCESS;
 }
 
 static int ofi_nd_pep_getopt(struct fid *ep, int level, int optname,
 			void *optval, size_t *optlen)
 {
-	return -FI_ENOSYS;
+	if (level != FI_OPT_ENDPOINT || optname != FI_OPT_CM_DATA_SIZE)
+		return -FI_ENOPROTOOPT;
+
+	if (*optlen < sizeof(size_t)) {
+		*optlen = sizeof(size_t);
+		return -FI_ETOOSMALL;
+	}
+
+	*((size_t *)optval) = ND_EP_MAX_CM_DATA_SIZE;
+	*optlen = sizeof(size_t);
+
+	return FI_SUCCESS;
 }
 
 #endif /* _WIN32 */

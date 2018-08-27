@@ -117,7 +117,7 @@ static int ofi_nd_adapter_cb(const ND2_ADAPTER_INFO *adapter, const char *name)
 	info->domain_attr->data_progress = FI_PROGRESS_AUTO;
 	info->domain_attr->resource_mgmt = FI_RM_DISABLED;
 	info->domain_attr->av_type = FI_AV_UNSPEC;
-	/* TODO implement MR_LOCAL */
+    /* TODO add FI_MR_LOCAL */
 	/* info->domain_attr->mr_mode = FI_MR_BASIC | OFI_MR_BASIC_MAP | FI_MR_LOCAL; */
 	info->domain_attr->mr_mode = FI_MR_BASIC | OFI_MR_BASIC_MAP;
 	info->domain_attr->cq_cnt = (size_t)adapter->MaxCompletionQueueDepth;

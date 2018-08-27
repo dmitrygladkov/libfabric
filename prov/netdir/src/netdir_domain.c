@@ -82,12 +82,71 @@ static struct fid ofi_nd_fid = {
 
 static int ofi_nd_domain_close(fid_t fid)
 {
-	return -FI_ENOSYS;
+	nd_domain_t *domain = container_of(fid, nd_domain_t, fid.fid);
+
+	DWORD ref = 0;
+
+	if (domain->cq)
+	{
+		domain->cq->lpVtbl->CancelOverlappedRequests(domain->cq);
+		domain->cq->lpVtbl->Release(domain->cq);
+	}
+
+	if (domain->info)
+		fi_freeinfo(domain->info);
+
+	if (domain->adapter_file && domain->adapter_file != INVALID_HANDLE_VALUE)
+		CloseHandle(domain->adapter_file);
+
+	if (domain->adapter)
+	{
+		ref = domain->adapter->lpVtbl->Release(domain->adapter);
+	}
+
+	free(domain);
+
+	return FI_SUCCESS;
+}
+
+static void ofi_nd_domain_event(nd_event_base_t *base, DWORD bytes)
+{
+}
+
+static void ofi_nd_domain_err(nd_event_base_t *base, DWORD bytes, DWORD err)
+{
 }
 
 void CALLBACK domain_io_cb(DWORD err, DWORD bytes, LPOVERLAPPED ov)
 {
-    /* TODO implement domain callback */
+	nd_event_base_t *base_ptr = container_of(ov, nd_event_base_t, ov);
+
+	ND_LOG_DEBUG(FI_LOG_EP_CTRL,
+		"IO callback: err: %s, bytes: %d\n",
+		ofi_nd_error_str(err), bytes);
+
+	if (err)
+	{
+		base_ptr->error_cb(base_ptr, bytes, err);
+	}
+	else
+	{
+		base_ptr->event_cb(base_ptr, bytes);
+	}
+}
+
+static HRESULT ofi_nd_domain_notify(nd_domain_t *domain)
+{
+	assert(domain);
+	assert(domain->fid.fid.fclass == FI_CLASS_DOMAIN);
+	assert(domain->cq);
+
+	nd_event_base_t base = {
+		.event_cb = ofi_nd_domain_event,
+		.error_cb = ofi_nd_domain_err
+	};
+
+	domain->base = base;
+	return domain->cq->lpVtbl->Notify(domain->cq, ND_CQ_NOTIFY_ANY, &domain->base.ov);
 }
 
 int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
@@ -103,7 +162,9 @@ int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 	nd_domain_ptr->fid.fid = ofi_nd_fid;
 	nd_domain_ptr->fid.ops = &ofi_nd_domain_ops;
 	nd_domain_ptr->fid.mr = &ofi_nd_mr_ops;
-	nd_domain_ptr->ainfo.InfoVersion = ND_VERSION_2;
+	nd_domain_ptr->info = fi_dupinfo(info);
+
+	dlist_init(&nd_domain_ptr->ep_list);
 
 	struct sockaddr *addr = NULL;
 	int res = ofi_nd_lookup_adapter(info->domain_attr->name,
@@ -129,6 +190,7 @@ int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		return HRESULT_FROM_WIN32(GetLastError());
 	}
 
+	nd_domain_ptr->ainfo.InfoVersion = ND_VERSION_2;
 	ULONG len = sizeof(nd_domain_ptr->ainfo);
 	hr = nd_domain_ptr->adapter->lpVtbl->Query(nd_domain_ptr->adapter,
 				&nd_domain_ptr->ainfo, &len);
@@ -152,13 +214,32 @@ int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 
 	*pdomain = &nd_domain_ptr->fid;
 
+	ND_LOG_DEBUG(FI_LOG_DOMAIN, "domain notification OV: %p\n", &nd_domain_ptr->base.ov);
+	hr = ofi_nd_domain_notify(nd_domain_ptr);
+	if (FAILED(hr))
+	{
+		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
+		return H2F(hr);
+	}
+
 	return FI_SUCCESS;
 }
 
 static int ofi_nd_domain_bind(struct fid *fid, struct fid *bfid,
 			      uint64_t flags)
 {
-	return -FI_ENOSYS;
+	nd_domain_t *domain = container_of(fid, nd_domain_t, fid.fid);
+
+	switch (bfid->fclass) {
+	case FI_CLASS_EQ:
+		domain->eq = container_of(bfid, nd_eq_t, fid.fid);
+		domain->eq_flags = flags;
+		break;
+	default:
+		return -FI_EINVAL;
+	}
+
+	return FI_SUCCESS;
 }
 
 #endif /* _WIN32 */

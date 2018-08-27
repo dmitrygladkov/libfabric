@@ -86,19 +86,6 @@ ofi_nd_ep_sendv(struct fid_ep *pep, const struct iovec *iov,
 	return -FI_ENOSYS;
 }
 
-typedef struct nd_cq_entry {
-	void* buf;
-	size_t len;
-	uint64_t data;
-	uint64_t flags;
-	struct nd_domain *domain;
-	void* context;
-	size_t iov_cnt;
-	struct iovec iov[ND_MSG_IOV_LIMIT];
-	/* uint64_t seq; */
-	nd_queue_item_t queue_item;
-} nd_cq_entry_t;
-
 #define ND_FI_CONTEXT(ptr) ((struct fi_context*)(ptr))->internal[0]
 
 static ssize_t
