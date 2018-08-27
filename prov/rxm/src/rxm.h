@@ -205,6 +205,15 @@ union rxm_sar_ctrl_data {
 	uint64_t align;
 };
 
+struct rxm_sar_seg {
+	enum rxm_sar_seg_type	type;
+	size_t			len;
+};
+
+struct rxm_ep;
+typedef struct rxm_sar_seg *(*rxm_ep_sar_alloc_segs_t)(struct rxm_ep *);
+typedef void (*rxm_ep_sar_free_segs_t)(struct rxm_ep *, struct rxm_sar_seg *);
+
 static inline enum rxm_sar_seg_type
 rxm_sar_get_seg_type(struct ofi_ctrl_hdr *ctrl_hdr)
 {
@@ -437,10 +446,22 @@ struct rxm_ep {
 	int			rxm_mr_local;
 	size_t			min_multi_recv_size;
 
-	size_t			sar_limit;
-	/* This defines maximum index of a segment for
-	 * which segment length mast be calculated. */
-	uint32_t		sar_max_calc_seg_no;
+	struct {
+		size_t			limit;
+		size_t			segs_cnt_limit;
+		/* This defines maximum index of a segment for
+		 * which segment length mast be calculated. */
+		uint32_t		max_calc_seg_no;
+		union {
+			struct {
+				struct util_buf_pool	*segs_pool;
+				fastlock_t		segs_pool_lock;
+			};
+			struct rxm_sar_seg	*segs;
+		};
+		rxm_ep_sar_alloc_segs_t	alloc_segs;
+		rxm_ep_sar_free_segs_t	free_segs;
+	} sar;
 
 	/* This is used only in non-FI_THREAD_SAFE case */
 	struct rxm_tx_buf	*inject_tx_buf;
