@@ -399,15 +399,14 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 	int context_type;
 
 	PSMX2_STATUS_INIT(status);
-
-	{
+	while (read_more) {
 		PSMX2_POLL_COMPLETION(trx_ctxt, status, err);
 
 		if (err == PSM2_OK) {
 			fi_context = PSMX2_STATUS_CONTEXT(status);
 			if (OFI_UNLIKELY(!fi_context)) {
 				PSMX2_FREE_COMPLETION(trx_ctxt, status);
-				return read_count;
+				continue;
 			}
 
 			ep = PSMX2_CTXT_EP(fi_context);
@@ -460,7 +459,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
 						  !psmx2_handle_sendv_req(ep, status, 0))) {
 					PSMX2_FREE_COMPLETION(trx_ctxt, status);
-					return read_count;
+					continue;
 				}
 				if (ep->recv_cq) {
 					op_context = fi_context;
@@ -491,7 +490,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
 						 !psmx2_handle_sendv_req(ep, status, 0))) {
 					PSMX2_FREE_COMPLETION(trx_ctxt, status);
-					return read_count;
+					continue;
 				}
 				if (ep->recv_cq) {
 					op_context = fi_context;
@@ -523,7 +522,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 						 !psmx2_handle_sendv_req(ep, status, 0))) {
 					PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
 					PSMX2_FREE_COMPLETION(trx_ctxt, status);
-					return read_count;
+					continue;
 				}
 				PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
 				if (OFI_UNLIKELY(ep->recv_cq && PSMX2_STATUS_ERROR(status))) {
@@ -556,7 +555,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 						 !psmx2_handle_sendv_req(ep, status, 0))) {
 					PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
 					PSMX2_FREE_COMPLETION(trx_ctxt, status);
-					return read_count;
+					continue;
 				}
 				PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
 				if (OFI_UNLIKELY(ep->recv_cq && PSMX2_STATUS_ERROR(status))) {
@@ -638,7 +637,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 							am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(status));
 						/* Request to be freed in AM handler */
 						PSMX2_FREE_COMPLETION(trx_ctxt, status);
-						return read_count;
+						continue;
 					}
 				}
 				op_context = PSMX2_CTXT_USER(fi_context);
@@ -674,7 +673,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 							am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(status));
 						/* Request to be freed in AM handler */
 						PSMX2_FREE_COMPLETION(trx_ctxt, status);
-						return read_count;
+						continue;
 					}
 				}
 				op_context = PSMX2_CTXT_USER(fi_context);
@@ -702,7 +701,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
 				    !psmx2_handle_sendv_req(ep, status, 1))) {
 					PSMX2_FREE_COMPLETION(trx_ctxt, status);
-					return read_count;
+					continue;
 				}
 				multi_recv_req = PSMX2_CTXT_USER(fi_context);
 				if (ep->recv_cq) {
@@ -805,7 +804,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 				if (sendv_req->iov_protocol == PSMX2_IOV_PROTO_MULTI &&
 				    sendv_req->iov_done < sendv_req->iov_info.count + 1) {
 					PSMX2_STATUS_SAVE(status, sendv_req->status);
-					return read_count;
+					continue;
 				}
 				if (ep->send_cq && !sendv_req->no_completion) {
 					op_context = sendv_req->user_context;
@@ -834,7 +833,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 				sendv_req->iov_done++;
 				PSMX2_FREE_COMPLETION(trx_ctxt, status);
 				if (sendv_req->iov_done < sendv_req->iov_info.count + 1)
-					return read_count;
+					continue;
 				status = sendv_req->status;
 				if (ep->send_cq && !sendv_req->no_completion) {
 					op_context = sendv_req->user_context;
@@ -867,7 +866,7 @@ int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
 					sendv_rep->error_code = PSMX2_STATUS_ERROR(status);
 				if (sendv_rep->iov_done < sendv_rep->iov_info.count) {
 					PSMX2_FREE_COMPLETION(trx_ctxt, status);
-					return read_count;
+					continue;
 				}
 
 				PSMX2_STATUS_TAG(status) = sendv_rep->tag;
