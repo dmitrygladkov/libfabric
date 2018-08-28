@@ -38,6 +38,8 @@
 #include <ofi_prov.h>
 #include "rxm.h"
 
+size_t rxm_def_univ_size	= 256;
+
 char *rxm_proto_state_str[] = {
 	RXM_PROTO_STATES(OFI_STR)
 };
@@ -145,6 +147,7 @@ int rxm_info_to_rxm(uint32_t version, const struct fi_info *core_info,
 	info->domain_attr->cq_data_size = MIN(core_info->domain_attr->cq_data_size,
 					      rxm_info.domain_attr->cq_data_size);
 	info->domain_attr->mr_key_size = core_info->domain_attr->mr_key_size;
+	info->domain_attr->cq_size = rxm_info.domain_attr->cq_size;
 
 	return 0;
 }
@@ -277,6 +280,7 @@ RXM_INI
 			"the RxM uses Shared Receive Context. This mode improves "
 			"memory consumption, but it may increase small message "
 			"latency as a side-effect.");
+	fi_param_get_size_t(NULL, "universe_size", &rxm_def_univ_size);
 
 	if (rxm_init_info()) {
 		FI_WARN(&rxm_prov, FI_LOG_CORE, "Unable to initialize rxm_info\n");

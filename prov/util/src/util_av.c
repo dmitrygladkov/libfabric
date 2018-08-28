@@ -53,7 +53,7 @@
 
 enum {
 	UTIL_NO_ENTRY = -1,
-	UTIL_DEFAULT_AV_SIZE = 1024,
+	UTIL_DEFAULT_AV_SIZE = 32768,
 };
 
 static int ofi_cmap_move_handle_to_peer_list(struct util_cmap *cmap, int index);

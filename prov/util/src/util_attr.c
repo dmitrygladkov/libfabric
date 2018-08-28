@@ -615,6 +615,12 @@ int ofi_check_domain_attr(const struct fi_provider *prov, uint32_t api_version,
 		return -FI_ENODATA;
 	}
 
+	if (user_attr->cq_size > prov_attr->cq_size) {
+		FI_INFO(prov, FI_LOG_CORE, "CQ size too large\n");
+		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, cq_size);
+		return -FI_ENODATA;
+	}
+
 	return 0;
 }
 

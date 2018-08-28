@@ -87,6 +87,7 @@ static int util_domain_init(struct util_domain *domain,
 	domain->av_type = info->domain_attr->av_type;
 	domain->name = strdup(info->domain_attr->name);
 	domain->threading = info->domain_attr->threading;
+	domain->cq_size = info->domain_attr->cq_size;
 	return domain->name ? 0 : -FI_ENOMEM;
 }
 
