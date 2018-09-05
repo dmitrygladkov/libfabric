@@ -115,12 +115,29 @@ rxm_conn_send_queue_close(struct rxm_conn *rxm_conn)
 	}
 }
 
+static void
+rxm_conn_cleanup_ep_repost_list(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn)
+{
+	struct rxm_rx_buf *buf;
+	struct dlist_entry *entry_tmp;
+
+	rxm_ep->res_fastlock_acquire(&rxm_ep->util_ep.lock);
+	dlist_foreach_container_safe(&rxm_ep->repost_ready_list, struct rxm_rx_buf,
+				     buf, repost_entry, entry_tmp) {
+		if (buf->hdr.msg_ep == rxm_conn->msg_ep)
+			dlist_remove(&buf->repost_entry);
+	}
+	rxm_ep->res_fastlock_release(&rxm_ep->util_ep.lock);
+}
+
 static void rxm_conn_close(struct util_cmap_handle *handle)
 {
 	struct rxm_conn *rxm_conn = container_of(handle, struct rxm_conn, handle);
+	struct rxm_ep *rxm_ep = container_of(handle->cmap->ep, struct rxm_ep, util_ep);
 
 	if (!rxm_conn->msg_ep)
 		return;
+	rxm_conn_cleanup_ep_repost_list(rxm_ep, rxm_conn);
 	rxm_conn->saved_msg_ep = rxm_conn->msg_ep;
 	FI_DBG(&rxm_prov, FI_LOG_EP_CTRL,
 	       "Saved MSG EP fid for further deletion in main thread\n");
@@ -130,6 +147,7 @@ static void rxm_conn_close(struct util_cmap_handle *handle)
 static void rxm_conn_free(struct util_cmap_handle *handle)
 {
 	struct rxm_conn *rxm_conn = container_of(handle, struct rxm_conn, handle);
+	struct rxm_ep *rxm_ep = container_of(handle->cmap->ep, struct rxm_ep, util_ep);
 
 	/* This handles case when saved_msg_ep wasn't closed */
 	if (rxm_conn->saved_msg_ep) {
@@ -140,6 +158,7 @@ static void rxm_conn_free(struct util_cmap_handle *handle)
 
 	if (!rxm_conn->msg_ep)
 		return;
+	rxm_conn_cleanup_ep_repost_list(rxm_ep, rxm_conn);
 	/* Assuming fi_close also shuts down the connection gracefully if the
 	 * endpoint is in connected state */
 	if (fi_close(&rxm_conn->msg_ep->fid))
