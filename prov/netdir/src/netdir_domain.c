@@ -36,8 +36,12 @@
 #define WIN32_NO_STATUS
 
 #include "netdir.h"
+#include "netdir_ov.h"
 #include "netdir_log.h"
-#include "netdir_misc.h"
+#include "netdir_util.h"
+#include "netdir_iface.h"
+#include "netdir_unexp.h"
+#include "netdir_cq.h"
 
 #include "ofi.h"
 #include "ofi_util.h"
@@ -46,10 +50,43 @@
 #include "rdma/fi_domain.h"
 
 static int ofi_nd_domain_close(fid_t fid);
-int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
-		       struct fid_domain **pdomain, void *context);
 static int ofi_nd_domain_bind(struct fid *fid, struct fid *bfid,
 			      uint64_t flags);
+
+/*
+struct nd_msgchunk {
+	IND2MemoryRegion		*mr;
+	ND_BUF_CHUNK(nd_msgprefix)	chunk;
+};
+
+struct nd_inlinechunk {
+	IND2MemoryRegion		*mr;
+	char*				base;
+	ND_BUF_CHUNK(nd_inlinebuf)	chunk;
+};
+
+struct nd_notifychunk {
+	IND2MemoryRegion		*mr;
+	ND_BUF_CHUNK(nd_notifybuf)	chunk;
+};
+
+static ND_BUF_CHUNK(nd_msgprefix)
+*ofi_nd_alloc_msgprefix_chunk(ND_BUF_FOOTER(nd_msgprefix) *footer,
+		       size_t *count);
+static void ofi_nd_free_msgprefix_chunk(ND_BUF_CHUNK(nd_msgprefix) *chunk);
+
+static ND_BUF_CHUNK(nd_inlinebuf)
+*ofi_nd_alloc_inlinebuf_chunk(ND_BUF_FOOTER(nd_inlinebuf) *footer, size_t *count);
+static void ofi_nd_free_inlinebuf_chunk(ND_BUF_CHUNK(nd_inlinebuf) *pchunk);
+
+static ND_BUF_CHUNK(nd_notifybuf)
+*ofi_nd_alloc_notifybuf_chunk(ND_BUF_FOOTER(nd_notifybuf) *footer, size_t *count);
+static void ofi_nd_free_notifybuf_chunk(ND_BUF_CHUNK(nd_notifybuf) *pchunk);
+*/
+
+static HRESULT ofi_nd_domain_notify(struct nd_domain *domain);
+static void ofi_nd_domain_event(struct nd_event_base* base, DWORD bytes);
+static void ofi_nd_domain_err(struct nd_event_base* base, DWORD bytes, DWORD err);
 
 static struct fi_ops_domain ofi_nd_domain_ops = {
 	.size = sizeof(ofi_nd_domain_ops),
@@ -59,10 +96,15 @@ static struct fi_ops_domain ofi_nd_domain_ops = {
 	.scalable_ep = fi_no_scalable_ep,
 	.cntr_open = ofi_nd_cntr_open,
 	.poll_open = fi_no_poll_open,
+	.stx_ctx = fi_no_stx_context,
+	.srx_ctx = ofi_nd_srx_ctx
 };
 
 static struct fi_ops_mr ofi_nd_mr_ops = {
 	.size = sizeof(ofi_nd_mr_ops),
+	.reg = ofi_nd_mr_reg,
+	.regv = ofi_nd_mr_regv,
+	.regattr = ofi_nd_mr_regattr
 };
 
 static struct fi_ops ofi_nd_fi_ops = {
@@ -79,167 +121,215 @@ static struct fid ofi_nd_fid = {
 	.ops = &ofi_nd_fi_ops
 };
 
-
 static int ofi_nd_domain_close(fid_t fid)
 {
-	nd_domain_t *domain = container_of(fid, nd_domain_t, fid.fid);
+	assert(fid->fclass == FI_CLASS_DOMAIN);
+
+	struct nd_domain *domain = container_of(fid, struct nd_domain, fid.fid);
 
 	DWORD ref = 0;
 
-	if (domain->cq)
-	{
+	if (domain->cq) {
 		domain->cq->lpVtbl->CancelOverlappedRequests(domain->cq);
+		while (!domain->cq_canceled || nd_async_progress)
+			SwitchToThread();
 		domain->cq->lpVtbl->Release(domain->cq);
 	}
-
 	if (domain->info)
 		fi_freeinfo(domain->info);
-
 	if (domain->adapter_file && domain->adapter_file != INVALID_HANDLE_VALUE)
 		CloseHandle(domain->adapter_file);
-
-	if (domain->adapter)
-	{
+	if (domain->adapter) {
 		ref = domain->adapter->lpVtbl->Release(domain->adapter);
+		ND_LOG_DEBUG(FI_LOG_EP_CTRL, "domain->adapter ref count: %d\n", ref);
 	}
 
 	free(domain);
 
-	return FI_SUCCESS;
-}
-
-static void ofi_nd_domain_event(nd_event_base_t *base, DWORD bytes)
-{
-}
-
-static void ofi_nd_domain_err(nd_event_base_t *base, DWORD bytes, DWORD err)
-{
-}
-
-void CALLBACK domain_io_cb(DWORD err, DWORD bytes, LPOVERLAPPED ov)
-{
-	nd_event_base_t *base_ptr = container_of(ov, nd_event_base_t, ov);
-
-	ND_LOG_DEBUG(FI_LOG_EP_CTRL,
-		"IO callback: err: %s, bytes: %d\n",
-		ofi_nd_error_str(err), bytes);
-
-	if (err)
-	{
-		base_ptr->error_cb(base_ptr, bytes, err);
-	}
-	else
-	{
-		base_ptr->event_cb(base_ptr, bytes);
-	}
-}
-
-static HRESULT ofi_nd_domain_notify(nd_domain_t *domain)
-{
-	assert(domain);
-	assert(domain->fid.fid.fclass == FI_CLASS_DOMAIN);
-	assert(domain->cq);
-
-	nd_event_base_t base = {
-		.event_cb = ofi_nd_domain_event,
-		.error_cb = ofi_nd_domain_err
-	};
-
-	domain->base = base;
-	return domain->cq->lpVtbl->Notify(domain->cq, ND_CQ_NOTIFY_ANY, &domain->base.ov);
+	return 0;
 }
 
 int ofi_nd_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		       struct fid_domain **pdomain, void *context)
 {
-	if (!pdomain)
+	OFI_UNUSED(context);
+
+	assert(fabric);
+	assert(fabric->fid.fclass == FI_CLASS_FABRIC);
+	assert(info);
+	assert(info->domain_attr);
+	assert(info->domain_attr->name);
+
+	if (!info || !info->domain_attr || !info->domain_attr->name)
 		return -FI_EINVAL;
 
-	nd_domain_t *nd_domain_ptr = (nd_domain_t*)calloc(1, sizeof(*nd_domain_ptr));
-	if (!nd_domain_ptr)
+	HRESULT hr;
+	int res;
+	struct sockaddr* addr;
+
+	struct nd_domain *domain = (struct nd_domain*)calloc(1, sizeof(*domain));
+	if (!domain)
 		return -FI_ENOMEM;
 
-	nd_domain_ptr->fid.fid = ofi_nd_fid;
-	nd_domain_ptr->fid.ops = &ofi_nd_domain_ops;
-	nd_domain_ptr->fid.mr = &ofi_nd_mr_ops;
-	nd_domain_ptr->info = fi_dupinfo(info);
+	struct nd_domain def = {
+		.fid = {
+			.fid = ofi_nd_fid,
+			.ops = &ofi_nd_domain_ops,
+			.mr = &ofi_nd_mr_ops
+		},
+		.info = fi_dupinfo(info)
+	};
 
-	dlist_init(&nd_domain_ptr->ep_list);
+	*domain = def;
 
-	struct sockaddr *addr = NULL;
-	int res = ofi_nd_lookup_adapter(info->domain_attr->name,
-				&nd_domain_ptr->adapter, &addr);
-	if (res || !nd_domain_ptr->adapter)
-	{
-		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
+	dlist_init(&domain->ep_list);
+
+	res = ofi_nd_lookup_adapter(info->domain_attr->name, &domain->adapter, &addr);
+	if (res || !domain->adapter) {
+		ofi_nd_domain_close(&domain->fid.fid);
 		return res;
 	}
-	memcpy(&nd_domain_ptr->addr, addr, ofi_sizeofaddr(addr));
 
-	HRESULT hr = nd_domain_ptr->adapter->lpVtbl->CreateOverlappedFile(nd_domain_ptr->adapter,
-							   &nd_domain_ptr->adapter_file);
-	if (FAILED(hr))
-	{
-		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
-		return H2F(hr);
-	}
+	memcpy(&domain->addr, addr, ofi_sizeofaddr(addr));
 
-	if (!BindIoCompletionCallback(nd_domain_ptr->adapter_file, domain_io_cb, 0))
-	{
-		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
-		return HRESULT_FROM_WIN32(GetLastError());
-	}
-
-	nd_domain_ptr->ainfo.InfoVersion = ND_VERSION_2;
-	ULONG len = sizeof(nd_domain_ptr->ainfo);
-	hr = nd_domain_ptr->adapter->lpVtbl->Query(nd_domain_ptr->adapter,
-				&nd_domain_ptr->ainfo, &len);
+	hr = domain->adapter->lpVtbl->CreateOverlappedFile(domain->adapter,
+							   &domain->adapter_file);
 
 	if (FAILED(hr))
-	{
-		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
-		return H2F(hr);
+		goto hr_failed;
+
+	if (!BindIoCompletionCallback(domain->adapter_file, domain_io_cb, 0)) {
+		hr = HRESULT_FROM_WIN32(GetLastError());
+		goto hr_failed;
 	}
 
-	hr = nd_domain_ptr->adapter->lpVtbl->CreateCompletionQueue(
-		nd_domain_ptr->adapter, &IID_IND2CompletionQueue, nd_domain_ptr->adapter_file,
-		nd_domain_ptr->ainfo.MaxCompletionQueueDepth, 0, 0,
-		(void**)&nd_domain_ptr->cq);
-
+	domain->ainfo.InfoVersion = ND_VERSION_2;
+	ULONG len = sizeof(domain->ainfo);
+	hr = domain->adapter->lpVtbl->Query(domain->adapter, &domain->ainfo,
+					    &len);
 	if (FAILED(hr))
-	{
-		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
-		return H2F(hr);
-	}
+		goto hr_failed;
 
-	*pdomain = &nd_domain_ptr->fid;
-
-	ND_LOG_DEBUG(FI_LOG_DOMAIN, "domain notification OV: %p\n", &nd_domain_ptr->base.ov);
-	hr = ofi_nd_domain_notify(nd_domain_ptr);
+	hr = domain->adapter->lpVtbl->CreateCompletionQueue(
+		domain->adapter, &IID_IND2CompletionQueue, domain->adapter_file,
+		domain->ainfo.MaxCompletionQueueDepth, 0, 0,
+		(void**)&domain->cq);
 	if (FAILED(hr))
-	{
-		ofi_nd_domain_close(&nd_domain_ptr->fid.fid);
-		return H2F(hr);
-	}
+		goto hr_failed;
+
+	*pdomain = &domain->fid;
+
+	ND_LOG_DEBUG(FI_LOG_DOMAIN, "domain notification OV: %p\n", &domain->ov.ov);
+	hr = ofi_nd_domain_notify(domain);
+	if (FAILED(hr))
+		goto hr_failed;
 
 	return FI_SUCCESS;
+
+hr_failed:
+	ofi_nd_domain_close(&domain->fid.fid);
+	return H2F(hr);
 }
 
 static int ofi_nd_domain_bind(struct fid *fid, struct fid *bfid,
 			      uint64_t flags)
 {
-	nd_domain_t *domain = container_of(fid, nd_domain_t, fid.fid);
+	assert(fid->fclass == FI_CLASS_DOMAIN);
+
+	struct nd_domain *domain = container_of(fid, struct nd_domain, fid.fid);
 
 	switch (bfid->fclass) {
 	case FI_CLASS_EQ:
-		domain->eq = container_of(bfid, nd_eq_t, fid.fid);
+		domain->eq = container_of(bfid, struct nd_eq, fid.fid);
 		domain->eq_flags = flags;
 		break;
 	default:
+		ND_LOG_WARN(FI_LOG_DOMAIN,
+			   "ofi_nd_domain_bind: incorrect bind object class: %d",
+			   bfid->fclass);
 		return -FI_EINVAL;
 	}
 
 	return FI_SUCCESS;
+}
+
+static HRESULT ofi_nd_domain_notify(struct nd_domain *domain)
+{
+	assert(domain);
+	assert(domain->fid.fid.fclass == FI_CLASS_DOMAIN);
+	assert(domain->cq);
+
+	nd_event_base ov = {
+		.event_cb = ofi_nd_domain_event,
+		.err_cb = ofi_nd_domain_err
+	};
+
+	domain->ov = ov;
+	return domain->cq->lpVtbl->Notify(domain->cq, ND_CQ_NOTIFY_ANY, &domain->ov.ov);
+}
+
+static void ofi_nd_domain_event(struct nd_event_base* base, DWORD bytes)
+{
+	OFI_UNUSED(bytes);
+
+	assert(base);
+	struct nd_domain *domain = container_of(base, struct nd_domain, ov);
+
+	assert(domain->fid.fid.fclass == FI_CLASS_DOMAIN);
+	assert(domain->cq);
+
+#define RESULT_MAX_SIZE 256
+	ND2_RESULT result[RESULT_MAX_SIZE];
+	DWORD count;
+	do {
+		count = domain->cq->lpVtbl->GetResults(domain->cq, result, RESULT_MAX_SIZE);
+		size_t i;
+		for (i = 0; i < count; i++) {
+			ND_LOG_DEBUG(FI_LOG_EP_DATA, "Domain event is %d with status %s\n",
+				     result[i].RequestType,
+				     ofi_nd_error_str(result[i].Status));
+			switch (result[i].RequestType) {
+			case Nd2RequestTypeReceive:
+				ofi_nd_unexp_event(&result[i]);
+				break;
+			case Nd2RequestTypeSend:
+				ofi_nd_send_event(&result[i]);
+				break;
+			case Nd2RequestTypeRead:
+				ofi_nd_read_event(&result[i]);
+				break;
+			case Nd2RequestTypeWrite:
+				ofi_nd_write_event(&result[i]);
+				break;
+			default:
+				/* shouldn't go here */
+				NODEFAULT;
+			}
+
+			/* Let's walk through sending queue to send data 
+			 * that are ready to be transmitted */
+			struct nd_ep *ep = (struct nd_ep*)result[i].QueuePairContext;
+			ofi_nd_ep_progress(ep);
+		}
+	} while (count == countof(result));
+
+
+	ofi_nd_domain_notify(domain);
+}
+
+static void ofi_nd_domain_err(struct nd_event_base* base, DWORD bytes, DWORD err)
+{
+	OFI_UNUSED(err);
+	if (err == STATUS_CANCELLED) {
+		struct nd_domain *domain = container_of(base, struct nd_domain, ov);
+
+		assert(domain->fid.fid.fclass == FI_CLASS_DOMAIN);
+		assert(domain->cq);
+		domain->cq_canceled = 1;
+		return;
+	}
+
+	ofi_nd_domain_event(base, bytes);
 }
 
 #endif /* _WIN32 */

@@ -33,7 +33,10 @@
 #ifdef _WIN32
 
 #include "netdir.h"
+#include "netdir_ov.h"
+#include "netdir_cq.h"
 #include "netdir_log.h"
+#include "netdir_iface.h"
 
 #include "rdma/fabric.h"
 #include "rdma/fi_endpoint.h"
@@ -106,6 +109,14 @@ ofi_nd_ep_writeinjectdata(struct fid_ep *ep, const void *buf, size_t len,
 			  uint64_t key)
 {
 	return -FI_ENOSYS;
+}
+
+void ofi_nd_read_event(ND2_RESULT *result)
+{
+}
+
+void ofi_nd_write_event(ND2_RESULT *result)
+{
 }
 
 struct fi_ops_rma ofi_nd_ep_rma = {

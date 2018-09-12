@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -435,6 +435,18 @@
     <ClCompile Include="prov\hook\src\hook_xfer.c">
       <Filter>Source Files\prov\hook\src</Filter>
     </ClCompile>
+    <ClCompile Include="prov\netdir\src\netdir_ep_srx.c">
+      <Filter>Source Files\prov\netdir\src</Filter>
+    </ClCompile>
+    <ClCompile Include="prov\netdir\src\netdir_mr.c">
+      <Filter>Source Files\prov\netdir\src</Filter>
+    </ClCompile>
+    <ClCompile Include="prov\netdir\src\netdir_ov.c">
+      <Filter>Source Files\prov\netdir\src</Filter>
+    </ClCompile>
+    <ClCompile Include="prov\netdir\src\netdir_unexp.c">
+      <Filter>Source Files\prov\netdir\src</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\fasthash.h">
@@ -599,9 +611,6 @@
     <ClInclude Include="prov\netdir\src\netdir.h">
       <Filter>Source Files\prov\netdir\include</Filter>
     </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_misc.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
     <ClInclude Include="prov\netdir\src\netdir_log.h">
       <Filter>Source Files\prov\netdir\include</Filter>
     </ClInclude>
@@ -644,10 +653,32 @@
     <ClInclude Include="prov\hook\src\hook_perf.h">
       <Filter>Source Files\prov\hook\src</Filter>
     </ClInclude>
+    <ClInclude Include="prov\netdir\src\netdir_cq.h">
+      <Filter>Source Files\prov\netdir\include</Filter>
+    </ClInclude>
+    <ClInclude Include="prov\netdir\src\netdir_iface.h">
+      <Filter>Source Files\prov\netdir\include</Filter>
+    </ClInclude>
+    <ClInclude Include="prov\netdir\src\netdir_misc.h">
+      <Filter>Source Files\prov\netdir\include</Filter>
+    </ClInclude>
+    <ClInclude Include="prov\netdir\src\netdir_ov.h">
+      <Filter>Source Files\prov\netdir\include</Filter>
+    </ClInclude>
+    <ClInclude Include="prov\netdir\src\netdir_queue.h">
+      <Filter>Source Files\prov\netdir\include</Filter>
+    </ClInclude>
+    <ClInclude Include="prov\netdir\src\netdir_unexp.h">
+      <Filter>Source Files\prov\netdir\include</Filter>
+    </ClInclude>
+    <ClInclude Include="prov\netdir\src\netdir_util.h">
+      <Filter>Source Files\prov\netdir\include</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="libfabric.def">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>

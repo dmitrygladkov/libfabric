@@ -38,6 +38,11 @@
 #include "ofi_util.h"
 #include "ofi_mem.h"
 
+#include "netdir_ov.h"
+#include "netdir_iface.h"
+
+#include "netdir_queue.h"
+
 const char ofi_nd_prov_name[] = "netdir";
 
 struct fi_provider ofi_nd_prov = {
@@ -53,6 +58,15 @@ struct util_prov ofi_nd_util_prov = {
 	.prov = &ofi_nd_prov,
 	.info = 0,
 	.flags = UTIL_RX_SHARED_CTX,
+};
+
+struct gl_data gl_data = {
+	/* 8 KByte */
+	.inline_thr = 8192,
+	.prepost_cnt = 8,
+	.prepost_buf_cnt = 1,
+	.flow_control_cnt = 1,
+	.total_avail = 64
 };
 
 int ofi_nd_getinfo(uint32_t version, const char *node, const char *service,
@@ -87,7 +101,7 @@ static int ofi_nd_adapter_cb(const ND2_ADAPTER_INFO *adapter, const char *name)
 
 	info->tx_attr->caps = FI_MSG | FI_SEND;
 	info->tx_attr->comp_order = FI_ORDER_STRICT;
-	info->tx_attr->inject_size = (size_t)0;
+	info->tx_attr->inject_size = (size_t)gl_data.inline_thr;
 	info->tx_attr->size = (size_t)adapter->MaxTransferLength;
 	/* TODO: if optimization will be needed, we can use adapter->MaxInitiatorSge,
 	 * and use ND SGE to send/write iovecs */
@@ -117,9 +131,7 @@ static int ofi_nd_adapter_cb(const ND2_ADAPTER_INFO *adapter, const char *name)
 	info->domain_attr->data_progress = FI_PROGRESS_AUTO;
 	info->domain_attr->resource_mgmt = FI_RM_DISABLED;
 	info->domain_attr->av_type = FI_AV_UNSPEC;
-    /* TODO add FI_MR_LOCAL */
-	/* info->domain_attr->mr_mode = FI_MR_BASIC | OFI_MR_BASIC_MAP | FI_MR_LOCAL; */
-	info->domain_attr->mr_mode = FI_MR_BASIC | OFI_MR_BASIC_MAP;
+	info->domain_attr->mr_mode = FI_MR_BASIC | OFI_MR_BASIC_MAP | FI_MR_LOCAL;
 	info->domain_attr->cq_cnt = (size_t)adapter->MaxCompletionQueueDepth;
 	info->domain_attr->mr_iov_limit = ND_MSG_IOV_LIMIT;
 	info->domain_attr->mr_cnt = OFI_ND_MAX_MR_CNT;
