@@ -48,14 +48,55 @@
 static ssize_t
 ofi_nd_ep_sendmsg(struct fid_ep *pep, const struct fi_msg *msg, uint64_t flags)
 {
-	return -FI_ENOSYS;
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	assert(ep);
+	assert(ep->qp);
+
+	ULONG len = 0UL;
+
+	for (size_t i = 0; i < msg->iov_count; i++)
+	{
+		if (msg->msg_iov[i].iov_len && !msg->msg_iov[i].iov_base)
+			return -FI_EINVAL;
+
+		len += msg->msg_iov[i].iov_len;
+	}
+
+	ND2_SGE sge = {
+		.Buffer = (msg->iov_count == 1) ? msg->msg_iov[0].iov_base : 0,
+		.BufferLength = (ULONG)len,
+		.MemoryRegionToken = msg->desc ? *(msg->desc) : NULL
+	};
+
+	HRESULT hr = ERROR_SUCCESS;
+	EnterCriticalSection(&ep->send_op.send_lock);
+
+	if (len)
+		hr = ep->qp->lpVtbl->Send(ep->qp, msg->context, &sge, 1, 0);
+	else
+		hr = ep->qp->lpVtbl->Send(ep->qp, msg->context, &sge, 1, ND_OP_FLAG_INLINE);
+
+	LeaveCriticalSection(&ep->send_op.send_lock);
+	ofi_nd_ep_progress(ep);
+	return H2F(hr);
 }
 
-static ssize_t
-ofi_nd_ep_inject(struct fid_ep *pep, const void *buf, size_t len,
+static ssize_t ofi_nd_ep_inject(struct fid_ep *pep, const void *buf, size_t len,
 	fi_addr_t dest_addr)
 {
-	return -FI_ENOSYS;
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	assert(ep);
+	assert(ep->qp);
+	EnterCriticalSection(&ep->send_op.send_lock);
+
+	ND2_SGE sge = {
+		.Buffer = buf,
+		.BufferLength = (ULONG)len,
+		.MemoryRegionToken = NULL
+	};
+	HRESULT hr = ep->qp->lpVtbl->Send(ep->qp, NULL, &sge, 1, ND_OP_FLAG_INLINE);
+	LeaveCriticalSection(&ep->send_op.send_lock);
+	return H2F(hr);
 }
 
 ssize_t
@@ -65,11 +106,27 @@ ofi_nd_ep_injectdata(struct fid_ep *pep, const void *buf, size_t len,
 	return -FI_ENOSYS;
 }
 
-static ssize_t
-ofi_nd_ep_senddata(struct fid_ep *pep, const void *buf, size_t len, void *desc,
+static ssize_t ofi_nd_ep_senddata(struct fid_ep *pep, const void *buf, size_t len, void *desc,
 				  uint64_t data, fi_addr_t dest_addr, void *context)
 {
-	return -FI_ENOSYS;
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	assert(ep);
+	assert(ep->qp);
+	EnterCriticalSection(&ep->send_op.send_lock);
+
+	ND2_SGE sge = {
+		.Buffer = buf,
+		.BufferLength = (ULONG)len,
+		.MemoryRegionToken = desc
+	};
+	HRESULT hr = ERROR_SUCCESS;
+	if (len)
+		hr = ep->qp->lpVtbl->Send(ep->qp, context, &sge, 1, 0);
+	else
+		hr = ep->qp->lpVtbl->Send(ep->qp, context, &sge, 1, ND_OP_FLAG_INLINE);
+
+	LeaveCriticalSection(&ep->send_op.send_lock);
+	return H2F(hr);
 }
 
 static ssize_t ofi_nd_ep_send(struct fid_ep *pep, const void *buf, size_t len,
@@ -78,102 +135,63 @@ static ssize_t ofi_nd_ep_send(struct fid_ep *pep, const void *buf, size_t len,
 	return ofi_nd_ep_senddata(pep, buf, len, desc, 0, dest_addr, context);
 }
 
-static ssize_t
-ofi_nd_ep_sendv(struct fid_ep *pep, const struct iovec *iov,
+static ssize_t ofi_nd_ep_sendv(struct fid_ep *pep, const struct iovec *iov,
 			       void **desc, size_t count, fi_addr_t dest_addr,
 			       void *context)
 {
 	return -FI_ENOSYS;
 }
 
-#define ND_FI_CONTEXT(ptr) ((struct fi_context*)(ptr))->internal[0]
-
-static ssize_t
-ofi_nd_ep_recvmsg(struct fid_ep *pep, const struct fi_msg *msg,
+static ssize_t ofi_nd_ep_recvmsg(struct fid_ep *pep, const struct fi_msg *msg,
 				 uint64_t flags)
 {
-	if (pep->fid.fclass != FI_CLASS_EP || !msg)
-		return -FI_EINVAL;
-
-	size_t i = 0;
-	size_t len = 0;
-
-	nd_ep_t *ep_ptr = container_of(pep, nd_ep_t, fid);
-
-	if (!ep_ptr->qp)
-		return -FI_EOPBADSTATE;
-
-	for (i = 0; i < msg->iov_count; i++)
-	{
-		if (msg->msg_iov[i].iov_len && !msg->msg_iov[i].iov_base)
-			return -FI_EINVAL;
-
-		len += msg->msg_iov[i].iov_len;
-	}
-
-	/*
-	if ((msg->iov_count > min(ep_ptr->domain->ainfo.MaxReceiveSge, ND_MSG_IOV_LIMIT) - 1) ||
-	    (len > ep_ptr->domain->info->ep_attr->max_msg_size))
-		return -FI_EINVAL;
-	*/
-	nd_cq_entry_t *entry_ptr = (nd_cq_entry_t *)calloc(1, sizeof(*entry_ptr));
-	if (!entry_ptr)
-		return -FI_ENOMEM;
-	memset(entry_ptr, 0, sizeof(*entry_ptr));
-
-	entry_ptr->buf = (msg->iov_count == 1) ? msg->msg_iov[0].iov_base : NULL;
-	entry_ptr->len = len;
-	entry_ptr->data = msg->data;
-	entry_ptr->flags = flags | FI_MSG | FI_RECV;
-	entry_ptr->domain = entry_ptr->domain;
-	entry_ptr->context = msg->context;
-	entry_ptr->iov_cnt = msg->iov_count;
-	/* entry_ptr->seq = InterlockedAdd64(&ep_ptr->domain->msg_cnt, 1); */
-
-	for (i = 0; i < msg->iov_count; i++)
-		entry_ptr->iov[i] = msg->msg_iov[i];
-
-	/* store allocated entry in 1st byte of internal data of context */
-	if (msg->context)
-		ND_FI_CONTEXT(msg->context) = entry_ptr;
-
-	ofi_nd_queue_push(&ep_ptr->prepost, &entry_ptr->queue_item);
-
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
-static ssize_t
-ofi_nd_ep_recvv(struct fid_ep *pep, const struct iovec *iov,
-			       void **desc, size_t count, fi_addr_t src_addr,
-			       void *context)
+static ssize_t ofi_nd_ep_recvv(struct fid_ep *pep, const struct iovec *iov,
+			       void **desc,
+			       size_t count, fi_addr_t src_addr, void *context)
 {
-	struct fi_msg msg = {
-		.msg_iov = iov,
-		.desc = desc,
-		.iov_count = count,
-		.addr = src_addr,
-		.context = context,
-		.data = 0
-	};
-
-	if (pep->fid.fclass != FI_CLASS_EP)
-		return -FI_EINVAL;
-
-	nd_ep_t *ep_ptr = container_of(pep, nd_ep_t, fid);
-
-	return ofi_nd_ep_recvmsg(pep, &msg, ep_ptr->info->rx_attr->op_flags);
+	return -FI_ENOSYS;
 }
 
-static ssize_t
-ofi_nd_ep_recv(struct fid_ep *pep, void *buf, size_t len,
+static ssize_t ofi_nd_ep_recv(struct fid_ep *pep, void *buf, size_t len,
 			      void *desc, fi_addr_t src_addr, void *context)
 {
-	struct iovec iov = {
-		.iov_base = buf,
-		.iov_len = len
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	ND2_SGE sge = {
+		.Buffer = buf,
+		.BufferLength = (ULONG)len,
+		.MemoryRegionToken = desc
 	};
+	HRESULT hr = ep->qp->lpVtbl->Receive(ep->qp, context, &sge, 1);
+	return H2F(hr);
+}
 
-	return ofi_nd_ep_recvv(pep, &iov, &desc, 1, src_addr, context);
+void ofi_nd_send_event(ND2_RESULT *result)
+{
+	assert(result);
+	assert(result->RequestType == Nd2RequestTypeSend);
+
+	nd_ep_t *ep = (nd_ep_t*)result->QueuePairContext;
+	assert(ep);
+	assert(ep->fid.fid.fclass == FI_CLASS_EP);
+
+	InterlockedIncrement(&ep->cq_send->count);
+	WakeByAddressAll((void*)&ep->cq_send->count);
+}
+
+void ofi_nd_receive_event(ND2_RESULT *result)
+{
+	assert(result);
+	assert(result->RequestType == Nd2RequestTypeReceive);
+
+	nd_ep_t *ep = (nd_ep_t *)result->QueuePairContext;
+	assert(ep);
+	assert(ep->fid.fid.fclass == FI_CLASS_EP);
+
+	InterlockedIncrement(&ep->cq_recv->count);
+	WakeByAddressAll((void*)&ep->cq_recv->count);
 }
 
 struct fi_ops_msg ofi_nd_ep_msg = {

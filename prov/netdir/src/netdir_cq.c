@@ -34,52 +34,17 @@
 
 #include "netdir.h"
 #include "netdir_misc.h"
+#include "netdir_log.h"
 
 #include "rdma/fabric.h"
 #include "ofi_util.h"
 
-static int ofi_nd_cq_close(struct fid *fid);
-int ofi_nd_cq_open(struct fid_domain *pdomain, struct fi_cq_attr *attr,
-		   struct fid_cq **pcq_fid, void *context);
-static ssize_t ofi_nd_cq_read(struct fid_cq *pcq, void *buf, size_t count);
-static ssize_t ofi_nd_cq_readfrom(struct fid_cq *cq, void *buf, size_t count,
-				  fi_addr_t *src_addr);
-static ssize_t ofi_nd_cq_readerr(struct fid_cq *pcq, struct fi_cq_err_entry *buf,
-				 uint64_t flags);
-static ssize_t ofi_nd_cq_sread(struct fid_cq *pcq, void *buf, size_t count,
-			       const void *cond, int timeout);
-static ssize_t ofi_nd_cq_sreadfrom(struct fid_cq *cq, void *buf, size_t count,
-				   fi_addr_t *src_addr, const void *cond, int timeout);
-static const char *ofi_nd_cq_strerror(struct fid_cq *cq, int prov_errno,
-				      const void *err_data, char *buf, size_t len);
-
-static struct fi_ops ofi_nd_fi_ops = {
-	.size = sizeof(ofi_nd_fi_ops),
-	.close = ofi_nd_cq_close,
-	.bind = fi_no_bind,
-	.control = fi_no_control,
-	.ops_open = fi_no_ops_open,
-};
-
-static struct fid ofi_nd_fid = {
-	.fclass = FI_CLASS_CQ,
-	.context = NULL,
-	.ops = &ofi_nd_fi_ops
-};
-
-static struct fi_ops_cq ofi_nd_cq_ops = {
-	.size = sizeof(ofi_nd_cq_ops),
-	.read = ofi_nd_cq_read,
-	.readfrom = ofi_nd_cq_readfrom,
-	.readerr = ofi_nd_cq_readerr,
-	.sread = ofi_nd_cq_sread,
-	.sreadfrom = ofi_nd_cq_sreadfrom,
-	.signal = fi_no_cq_signal,
-	.strerror = ofi_nd_cq_strerror
-};
+static struct fid ofi_nd_fid;
+static struct fi_ops_cq ofi_nd_cq_ops;
 
 static int ofi_nd_cq_close(struct fid *fid)
 {
+	assert(fid->fclass == FI_CLASS_CQ);
 	if (fid->fclass != FI_CLASS_CQ)
 		return -FI_EINVAL;
 
@@ -87,7 +52,6 @@ static int ofi_nd_cq_close(struct fid *fid)
 
 	if (cq->iocp && cq->iocp != INVALID_HANDLE_VALUE)
 		CloseHandle(cq->iocp);
-
 	if (cq->err && cq->err != INVALID_HANDLE_VALUE)
 		CloseHandle(cq->err);
 
@@ -99,8 +63,18 @@ static int ofi_nd_cq_close(struct fid *fid)
 int ofi_nd_cq_open(struct fid_domain *pdomain, struct fi_cq_attr *attr,
 		   struct fid_cq **pcq_fid, void *context)
 {
+	OFI_UNUSED(context);
+
+	assert(pdomain);
+	assert(pdomain->fid.fclass == FI_CLASS_DOMAIN);
+
 	if (pdomain->fid.fclass != FI_CLASS_DOMAIN)
 		return -FI_EINVAL;
+
+	if (pdomain->fid.fclass != FI_CLASS_DOMAIN)
+		return -FI_EINVAL;
+
+	HRESULT hr;
 
 	if (attr)
 	{
@@ -109,8 +83,8 @@ int ofi_nd_cq_open(struct fid_domain *pdomain, struct fi_cq_attr *attr,
 			return -FI_EBADFLAGS;
 	}
 
-	nd_cq_t *nd_cq_ptr = (nd_cq_t*)calloc(1, sizeof(*nd_cq_ptr));
-	if (!nd_cq_ptr)
+	nd_cq_t *cq = (nd_cq_t*)calloc(1, sizeof(*cq));
+	if (!cq)
 		return -FI_ENOMEM;
 
 	nd_cq_t def = {
@@ -121,44 +95,202 @@ int ofi_nd_cq_open(struct fid_domain *pdomain, struct fi_cq_attr *attr,
 		.format = attr ? attr->format : FI_CQ_FORMAT_CONTEXT
 	};
 
-	*nd_cq_ptr = def;
+	*cq = def;
 
-	nd_domain_t *domain = container_of(pdomain, struct nd_domain, fid);
+	if (cq->format == FI_CQ_FORMAT_UNSPEC)
+	{
+		cq->format = FI_CQ_FORMAT_CONTEXT;
+		if (attr)
+			attr->format = cq->format;
+	}
+
+	nd_domain_t *domain = container_of(pdomain, nd_domain_t, fid);
 	assert(domain->adapter);
 	assert(domain->adapter_file);
 
-	HRESULT hr = ERROR_SUCCESS;
-	nd_cq_ptr->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
-	if (!nd_cq_ptr->iocp || nd_cq_ptr->iocp == INVALID_HANDLE_VALUE) {
+	cq->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	if (!cq->iocp || cq->iocp == INVALID_HANDLE_VALUE)
+	{
 		hr = -FI_EINVAL;
-		ofi_nd_cq_close(&nd_cq_ptr->fid.fid);
-		return H2F(hr);
-	}
-	nd_cq_ptr->err = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
-	if (!nd_cq_ptr->err || nd_cq_ptr->err == INVALID_HANDLE_VALUE) {
-		hr = -FI_EINVAL;
-		ofi_nd_cq_close(&nd_cq_ptr->fid.fid);
-		return H2F(hr);
+		goto hr_fail;
 	}
 
-	*pcq_fid = &nd_cq_ptr->fid;
+	cq->err = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+	if (!cq->err || cq->err == INVALID_HANDLE_VALUE)
+	{
+		hr = -FI_EINVAL;
+		goto hr_fail;
+	}
+
+	*pcq_fid = &cq->fid;
 
 	return FI_SUCCESS;
+
+hr_fail:
+	ofi_nd_cq_close(&cq->fid.fid);
+	ND_LOG_WARN(FI_LOG_CQ, ofi_nd_strerror((DWORD)hr, NULL));
+	return H2F(hr);
 }
 
-static inline void ofi_nd_free_cq_entry(struct nd_cq_entry *entry)
+typedef struct nd_msgheader {
+	uint64_t		data;
+	ofi_nd_cq_event_t	event;
+	nd_flow_cntrl_flags_t	flags;
+	size_t			location_cnt;
+} nd_msgheader_t;
+
+typedef struct nd_msgprefix {
+	UINT32			token;
+	nd_msgheader_t	header;
+} nd_msgprefix_t;
+
+/* push call is non-blocking thread safe */
+static inline void ofi_nd_queue_push(struct nd_queue_queue *queue,
+				     struct nd_queue_item *item)
+{
+	assert(queue);
+
+	item->next = 0;
+	BOOLEAN success;
+
+	struct {
+		nd_queue_item_t *head;
+		nd_queue_item_t *tail;
+	} src;
+
+	do
+	{
+		src.head = queue->head;
+		src.tail = queue->tail;
+
+		LONG64 head = (LONG64)(src.head ? src.head : item);
+		LONG64 tail = (LONG64)item;
+		__declspec(align(16)) LONG64 compare[2] = {(LONG64)src.head, (LONG64)src.tail};
+		success = InterlockedCompareExchange128(
+			queue->exchange, tail, head, compare);
+	} while (!success);
+
+	if (src.tail)
+	{
+		src.tail->next = item;
+		WakeByAddressAll(&src.tail->next);
+	}
+}
+
+/* pop call is NOT thread safe, it allows only one consumer, but it is
+   safe to be used with push operation without locks */
+static inline int ofi_nd_queue_pop(nd_queue_queue_t *queue,
+				   nd_queue_item_t **item)
+{
+	assert(queue);
+	assert(item);
+
+	BOOLEAN success;
+	struct {
+		nd_queue_item_t *head;
+		nd_queue_item_t *tail;
+	} src;
+
+	do
+	{
+		src.head = queue->head;
+		src.tail = queue->tail;
+
+		if (!src.head)
+			return 0;
+
+		/* here is potential thread race: object located at src.head
+		   may be destroyed while we're waiting. that is why pop
+		   operation is not thread safe */
+		if (src.head != src.tail)
+		{
+			/* in case if head and tail are not same - ensure that
+			   head->next element is not NULL */
+			void *zero = NULL;
+			while (!src.head->next)
+			{
+				WaitOnAddress(&src.head->next, &zero, sizeof(zero), INFINITE);
+			}
+		}
+
+		LONG64 head = (LONG64)src.head->next;
+		LONG64 tail = (LONG64)(src.head != src.tail ? src.tail : NULL);
+		__declspec(align(16)) LONG64 compare[2] = {(LONG64)src.head, (LONG64)src.tail};
+		success = InterlockedCompareExchange128(
+			queue->exchange, tail, head, compare);
+	} while (!success);
+
+	*item = src.head;
+
+	return (*item) != NULL;
+}
+
+/* peek call is NOT thread safe, it allows only one consumer */
+static inline int ofi_nd_queue_peek(nd_queue_queue_t *queue,
+				    nd_queue_item_t **item)
+{
+	assert(queue);
+	assert(item);
+
+	*item = queue->head;
+	return (*item) != 0;
+}
+
+void ofi_nd_ep_progress(nd_ep_t *ep)
+{
+	HRESULT hr;
+	nd_queue_item_t *qentry = NULL;
+	nd_send_entry_t *send_entry = NULL;
+
+	EnterCriticalSection(&ep->send_op.send_lock);
+	while (ofi_nd_queue_peek(&ep->send_queue, &qentry) &&
+		!(ep->send_op.flags.is_send_blocked))
+	{
+		ep->send_op.used_counter++;
+		send_entry = container_of(qentry, nd_send_entry_t, queue_item);
+		ofi_nd_queue_pop(&ep->send_queue, &qentry);
+
+		if (!(ep->send_op.used_counter % gl_data.prepost_cnt)) {
+			ep->send_op.flags.is_send_blocked = 1;
+			ep->send_op.used_counter = 0;
+			nd_msgheader_t *header = (nd_msgheader_t *)
+				send_entry->sge->entries[0].Buffer;
+			header->flags.req_ack = 1;
+		}
+
+		/* If there is prepost entry (it means that this SEND event
+		 * expects an answer). In this case, push CQ entry to prepost
+		 * queue to receive event(answer) */
+		if (send_entry->prepost_entry) {
+			ND_LOG_DEBUG(FI_LOG_EP_DATA, "Posted entry(state = %d) that "
+				     "expects an answer from peer to which the send "
+				     "event is belong\n", send_entry->prepost_entry->state);
+			ofi_nd_queue_push(&ep->internal_prepost,
+				&send_entry->prepost_entry->queue_item);
+		}
+
+		hr = send_entry->ep->qp->lpVtbl->Send(send_entry->ep->qp,
+			send_entry->cq_entry,
+			send_entry->sge->entries,
+			send_entry->sge->count, 0);
+		if (FAILED(hr))
+			ND_LOG_WARN(FI_LOG_CQ, "Send failed from Send Queue\n");
+	}
+	LeaveCriticalSection(&ep->send_op.send_lock);
+}
+
+static uint64_t ofi_nd_cq_sanitize_flags(uint64_t flags)
+{
+	return (flags & (FI_SEND | FI_RECV | FI_RMA | FI_ATOMIC |
+		FI_MSG | FI_TAGGED |
+		FI_READ | FI_WRITE |
+		FI_REMOTE_READ | FI_REMOTE_WRITE |
+		FI_REMOTE_CQ_DATA | FI_MULTI_RECV));
+}
+
+static inline void ofi_nd_free_cq_entry(nd_cq_entry_t *entry)
 {
 	assert(entry);
-
-	if (entry->prefix)
-	{
-		free(entry->prefix);
-	}
-
-	if (entry->inline_buf)
-	{
-		free(entry->inline_buf);
-	}
 
 	while (entry->mr_count) {
 		entry->mr_count--;
@@ -177,20 +309,11 @@ static inline void ofi_nd_free_cq_entry(struct nd_cq_entry *entry)
 	free(entry);
 }
 
-static uint64_t ofi_nd_cq_sanitize_flags(uint64_t flags)
-{
-	return (flags & (FI_SEND | FI_RECV | FI_RMA | FI_ATOMIC |
-		FI_MSG | FI_TAGGED |
-		FI_READ | FI_WRITE |
-		FI_REMOTE_READ | FI_REMOTE_WRITE |
-		FI_REMOTE_CQ_DATA | FI_MULTI_RECV));
-}
-
 static void ofi_nd_cq_ov2buf(struct nd_cq *cq, OVERLAPPED_ENTRY *ov,
 			     void* buf, ULONG count)
 {
 	ULONG i;
-	struct nd_msgprefix *prefix;
+	nd_msgprefix_t *prefix;
 
 	switch (cq->format) {
 	case FI_CQ_FORMAT_CONTEXT:
@@ -217,6 +340,7 @@ static void ofi_nd_cq_ov2buf(struct nd_cq *cq, OVERLAPPED_ENTRY *ov,
 				size_t header_len = (cqen->result.RequestType == Nd2RequestTypeSend ||
 						     cqen->result.RequestType == Nd2RequestTypeReceive) ?
 					sizeof(prefix->header) : 0;
+
 				entry[i].len = cqen->result.BytesTransferred - header_len;
 				ofi_nd_free_cq_entry(cqen);
 			}
@@ -232,6 +356,7 @@ static void ofi_nd_cq_ov2buf(struct nd_cq *cq, OVERLAPPED_ENTRY *ov,
 				size_t header_len = (cqen->result.RequestType == Nd2RequestTypeSend ||
 						     cqen->result.RequestType == Nd2RequestTypeReceive) ?
 					sizeof(prefix->header) : 0;
+
 				entry[i].len = cqen->result.BytesTransferred - header_len;
 				entry[i].buf = cqen->buf;
 				ofi_nd_free_cq_entry(cqen);
@@ -248,6 +373,7 @@ static void ofi_nd_cq_ov2buf(struct nd_cq *cq, OVERLAPPED_ENTRY *ov,
 				size_t header_len = (cqen->result.RequestType == Nd2RequestTypeSend ||
 						     cqen->result.RequestType == Nd2RequestTypeReceive) ?
 					sizeof(prefix->header) : 0;
+
 				entry[i].len = cqen->result.BytesTransferred - header_len;
 				entry[i].buf = cqen->buf;
 				entry[i].tag = 0;
@@ -256,45 +382,60 @@ static void ofi_nd_cq_ov2buf(struct nd_cq *cq, OVERLAPPED_ENTRY *ov,
 		}
 		break;
 	default:
+		ND_LOG_WARN(FI_LOG_CQ, "incorrect CQ format: %d\n", cq->format);
 		break;
 	}
 }
 
 static ssize_t ofi_nd_cq_read(struct fid_cq *pcq, void *buf, size_t count)
 {
+	assert(pcq);
+	assert(pcq->fid.fclass == FI_CLASS_CQ);
+
 	if (pcq->fid.fclass != FI_CLASS_CQ)
 		return -FI_EINVAL;
 
 	nd_cq_t *cq = container_of(pcq, nd_cq_t, fid);
-	if (!cq->count)
-		return -FI_EAGAIN;
 
 	ULONG cnt = (ULONG)count;
 	ULONG dequeue = 0;
 	ssize_t res = 0;
-	OVERLAPPED_ENTRY _ov[256];
+
+#define MAX_OVERLAP_ENTRIES 256
+	OVERLAPPED_ENTRY _ov[MAX_OVERLAP_ENTRIES];
+
+	if (!cq->count)
+		return -FI_EAGAIN;
+
+	if (cq->count > 0)
+	{
+		InterlockedDecrement(&cq->count);
+		return 1;
+	}
 
 	OVERLAPPED_ENTRY *ov = (cnt <= _countof(_ov)) ?
 		_ov : malloc(cnt * sizeof(*ov));
 
 	if (!ov)
 	{
+		ND_LOG_WARN(FI_LOG_CQ, "failed to allocate OV\n");
 		return -FI_ENOMEM;
 	}
 
+	assert(cq->iocp && cq->iocp != INVALID_HANDLE_VALUE);
 	if (!GetQueuedCompletionStatusEx(cq->iocp, ov, cnt, &dequeue, 0, FALSE) ||
 	    !dequeue)
 	{
 		res = cq->count ? -FI_EAVAIL : -FI_EAGAIN;
-		if (ov != _ov)
-			free(ov);
-		return res;
+		goto fn_complete;
 	}
 
 	ofi_nd_cq_ov2buf(cq, ov, buf, dequeue);
 	res = (ssize_t)dequeue;
 	InterlockedAdd(&cq->count, -(LONG)dequeue);
+	assert(cq->count >= 0);
 
+fn_complete:
 	if (ov != _ov)
 		free(ov);
 	return res;
@@ -303,146 +444,59 @@ static ssize_t ofi_nd_cq_read(struct fid_cq *pcq, void *buf, size_t count)
 static ssize_t ofi_nd_cq_readfrom(struct fid_cq *cq, void *buf, size_t count,
 				  fi_addr_t *src_addr)
 {
-	size_t i;
-	for(i = 0; i < count; i++)
-		src_addr[i] = FI_ADDR_NOTAVAIL;
-	return ofi_nd_cq_read(cq, buf, count);
+	return -FI_ENOSYS;
 }
 
 static ssize_t ofi_nd_cq_readerr(struct fid_cq *pcq, struct fi_cq_err_entry *buf,
 				 uint64_t flags)
 {
-	if (pcq->fid.fclass != FI_CLASS_CQ)
-		return -FI_EINVAL;
-
-	nd_cq_t *cq = container_of(pcq, nd_cq_t, fid);
-
-	ULONG_PTR key = 0;
-	DWORD bytes = 0;
-	OVERLAPPED *ov = 0;
-
-	if (!cq->count)
-		return -FI_EAGAIN;
-
-	assert(cq->err && cq->err != INVALID_HANDLE_VALUE);
-	if (!GetQueuedCompletionStatus(cq->err, &bytes, &key, &ov, 0))
-		return -FI_EAGAIN;
-
-	nd_cq_entry_t *entry = container_of(ov, nd_cq_entry_t, base.ov);
-
-	buf->op_context = entry->result.RequestContext;
-	buf->flags = entry->flags;
-	buf->len = entry->len;
-	buf->buf = entry->buf;
-	buf->data = entry->data;
-	buf->tag = 0; /* while tagged send/recv isn't added */
-	buf->olen = 0;
-	buf->err = -H2F(entry->result.Status);
-	buf->prov_errno = entry->result.Status;
-	buf->err_data_size = 0;
-
-	InterlockedDecrement(&cq->count);
-	assert(cq->count >= 0);
-
-	return FI_SUCCESS;
+	return -FI_ENOSYS;
 }
 
 static ssize_t ofi_nd_cq_sread(struct fid_cq *pcq, void *buf, size_t count,
 			       const void *cond, int timeout)
 {
-	if (pcq->fid.fclass != FI_CLASS_CQ)
-		return -FI_EINVAL;
-
-	nd_cq_t *cq = container_of(pcq, nd_cq_t, fid);
-
-	ULONG cnt = (ULONG)count;
-	ULONG dequeue = 0;
-	ssize_t res = 0;
-	OVERLAPPED_ENTRY _ov[256];
-
-	OVERLAPPED_ENTRY *ov = (cnt <= _countof(_ov)) ?
-		_ov : malloc(cnt * sizeof(*ov));
-
-	if (!ov)
-	{
-		return -FI_ENOMEM;
-	}
-
-	LONG zero = 0;
-	OFI_ND_TIMEOUT_INIT(timeout);
-	do
-	{
-		do
-		{
-			if (!WaitOnAddress(
-				&cq->count, &zero, sizeof(cq->count),
-				(DWORD)timeout) && timeout >= 0)
-			{
-				res = -FI_EAGAIN;
-				if (ov != _ov)
-					free(ov);
-				return res;
-			}
-		} while (!cq->count && !OFI_ND_TIMEDOUT());
-
-		if (!cq->count)
-		{
-			res = -FI_EAGAIN;
-			if (ov != _ov)
-				free(ov);
-			return res;
-		}
-
-
-		assert(cq->iocp && cq->iocp != INVALID_HANDLE_VALUE);
-		if (!GetQueuedCompletionStatusEx(cq->iocp, ov, cnt, &dequeue, 0, FALSE) ||
-		    !dequeue)
-		{
-			if (cq->count)
-			{
-				res = -FI_EAVAIL;
-				if (ov != _ov)
-					free(ov);
-				return res;
-			}
-			else
-			{
-				continue;
-			}
-		}
-
-		ofi_nd_cq_ov2buf(cq, ov, buf, dequeue);
-		res = (ssize_t)dequeue;
-		InterlockedAdd(&cq->count, -(LONG)dequeue);
-		assert(cq->count >= 0);
-		if (ov != _ov)
-			free(ov);
-		return res;
-	} while (!OFI_ND_TIMEDOUT());
-
-	if (ov != _ov)
-		free(ov);
-	return res;
+	return -FI_ENOSYS;
 }
 
 static ssize_t ofi_nd_cq_sreadfrom(struct fid_cq *cq, void *buf, size_t count,
 				   fi_addr_t *src_addr, const void *cond,
 				   int timeout)
 {
-	size_t i;
-	for (i = 0; i < count; i++)
-		src_addr[i] = FI_ADDR_NOTAVAIL;
-	return ofi_nd_cq_sread(cq, buf, count, cond, timeout);
+	return -FI_ENOSYS;
 }
 
 static const char *ofi_nd_cq_strerror(struct fid_cq *cq, int prov_errno,
 				      const void *err_data, char *buf,
 				      size_t len)
 {
-	if (buf && len)
-		return strncpy(buf, fi_strerror(-prov_errno), len);
-	return fi_strerror(-prov_errno);
+	return -FI_ENOSYS;
 }
+
+static struct fi_ops ofi_nd_fi_ops = {
+	.size = sizeof(ofi_nd_fi_ops),
+	.close = ofi_nd_cq_close,
+	.bind = fi_no_bind,
+	.control = fi_no_control,
+	.ops_open = fi_no_ops_open,
+};
+
+static struct fid ofi_nd_fid = {
+	.fclass = FI_CLASS_CQ,
+	.context = NULL,
+	.ops = &ofi_nd_fi_ops
+};
+
+static struct fi_ops_cq ofi_nd_cq_ops = {
+	.size = sizeof(ofi_nd_cq_ops),
+	.read = ofi_nd_cq_read,
+	.readfrom = ofi_nd_cq_readfrom,
+	.readerr = ofi_nd_cq_readerr,
+	.sread = ofi_nd_cq_sread,
+	.sreadfrom = ofi_nd_cq_sreadfrom,
+	.signal = fi_no_cq_signal,
+	.strerror = ofi_nd_cq_strerror
+};
 
 #endif /* _WIN32 */
 

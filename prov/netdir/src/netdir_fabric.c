@@ -40,6 +40,19 @@
 #include "ofi_enosys.h"
 #include "rdma/fabric.h"
 
+typedef struct nd_fabric {
+	struct fid_fabric	fid;
+} nd_fabric_t;
+
+struct gl_data gl_data = {
+	/* 8 KByte */
+	.inline_thr = 8192,
+	.prepost_cnt = 8,
+	.prepost_buf_cnt = 1,
+	.flow_control_cnt = 1,
+	.total_avail = 64
+};
+
 static int ofi_nd_fabric_close(fid_t fid);
 
 static struct fi_ops ofi_nd_fi_ops = {
@@ -65,17 +78,13 @@ static struct fi_ops_fabric ofi_nd_fabric_ops = {
 	.trywait = fi_no_trywait
 };
 
-typedef struct nd_fabric {
-	struct fid_fabric fab_fid;
-} nd_fabric_t;
-
 static int ofi_nd_fabric_close(fid_t fid)
 {
 	nd_fabric_t *fabric;
-	fabric = container_of(fid, nd_fabric_t, fab_fid.fid);
+	fabric = container_of(fid, struct nd_fabric, fid.fid);
 	free(fabric);
 	/* due to issues in cleanup NetworkDirect on library
-	   unload make cleaning here, on fabric close */
+	   unload make clening here, on fabric close */
 	ofi_nd_shutdown();
 	return FI_SUCCESS;
 }
@@ -83,8 +92,7 @@ static int ofi_nd_fabric_close(fid_t fid)
 int ofi_nd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fab,
 		  void *context)
 {
-	if (!fab)
-		return -FI_EINVAL;
+	OFI_UNUSED(context);
 
 	if (attr)
 	{
@@ -96,14 +104,26 @@ int ofi_nd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fab,
 			return -FI_EINVAL;
 	}
 
-	nd_fabric_t *nd_fabric_ptr = (nd_fabric_t*)calloc(1, sizeof(*nd_fabric_ptr));
-	if (!nd_fabric_ptr)
+	nd_fabric_t *fabric = (nd_fabric_t*)calloc(1, sizeof(*fabric));
+	if (!fabric)
 		return -FI_ENOMEM;
 
-	nd_fabric_ptr->fab_fid.fid = ofi_nd_fid;
-	nd_fabric_ptr->fab_fid.ops = &ofi_nd_fabric_ops;
+	nd_fabric_t def = {
+		.fid = {
+			.fid = ofi_nd_fid,
+			.ops = &ofi_nd_fabric_ops
+		}
+	};
 
-	*fab = &nd_fabric_ptr->fab_fid;
+	*fabric = def;
+
+	*fab = &fabric->fid;
+
+	fi_param_get_int(&ofi_nd_prov, "inlinethr", &gl_data.inline_thr);
+	fi_param_get_int(&ofi_nd_prov, "prepostcnt", &gl_data.prepost_cnt);
+	fi_param_get_int(&ofi_nd_prov, "prepostbufcnt", &gl_data.prepost_buf_cnt);
+
+	gl_data.total_avail = gl_data.prepost_cnt * gl_data.prepost_buf_cnt;
 
 	return FI_SUCCESS;
 }
