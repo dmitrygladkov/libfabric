@@ -435,18 +435,6 @@
     <ClCompile Include="prov\hook\src\hook_xfer.c">
       <Filter>Source Files\prov\hook\src</Filter>
     </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_ep_srx.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_mr.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_ov.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
-    <ClCompile Include="prov\netdir\src\netdir_unexp.c">
-      <Filter>Source Files\prov\netdir\src</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\fasthash.h">
@@ -653,25 +641,7 @@
     <ClInclude Include="prov\hook\src\hook_perf.h">
       <Filter>Source Files\prov\hook\src</Filter>
     </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_cq.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_iface.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
     <ClInclude Include="prov\netdir\src\netdir_misc.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_ov.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_queue.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_unexp.h">
-      <Filter>Source Files\prov\netdir\include</Filter>
-    </ClInclude>
-    <ClInclude Include="prov\netdir\src\netdir_util.h">
       <Filter>Source Files\prov\netdir\include</Filter>
     </ClInclude>
   </ItemGroup>

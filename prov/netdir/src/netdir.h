@@ -118,6 +118,7 @@ int ofi_nd_cntr_open(struct fid_domain *pdomain, struct fi_cntr_attr *attr,
 
 typedef int(*ofi_nd_adapter_cb_t)(const ND2_ADAPTER_INFO* info, const char *name);
 
+void ofi_nd_receive_event(ND2_RESULT *result);
 void ofi_nd_send_event(ND2_RESULT *result);
 void ofi_nd_read_event(ND2_RESULT *result);
 void ofi_nd_write_event(ND2_RESULT *result);

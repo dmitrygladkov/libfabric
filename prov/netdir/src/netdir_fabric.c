@@ -40,8 +40,18 @@
 #include "ofi_enosys.h"
 #include "rdma/fabric.h"
 
-#include "netdir_ov.h"
-#include "netdir_iface.h"
+typedef struct nd_fabric {
+	struct fid_fabric	fid;
+} nd_fabric_t;
+
+struct gl_data gl_data = {
+	/* 8 KByte */
+	.inline_thr = 8192,
+	.prepost_cnt = 8,
+	.prepost_buf_cnt = 1,
+	.flow_control_cnt = 1,
+	.total_avail = 64
+};
 
 static int ofi_nd_fabric_close(fid_t fid);
 
@@ -70,7 +80,7 @@ static struct fi_ops_fabric ofi_nd_fabric_ops = {
 
 static int ofi_nd_fabric_close(fid_t fid)
 {
-	struct nd_fabric *fabric;
+	nd_fabric_t *fabric;
 	fabric = container_of(fid, struct nd_fabric, fid.fid);
 	free(fabric);
 	/* due to issues in cleanup NetworkDirect on library
@@ -84,7 +94,8 @@ int ofi_nd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fab,
 {
 	OFI_UNUSED(context);
 
-	if (attr) {
+	if (attr)
+	{
 		if (attr->name && strcmp(attr->name, ofi_nd_prov.name))
 			return -FI_EINVAL;
 		if (attr->prov_name && strcmp(attr->prov_name, ofi_nd_prov.name))
@@ -93,11 +104,11 @@ int ofi_nd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fab,
 			return -FI_EINVAL;
 	}
 
-	struct nd_fabric *fabric = (struct nd_fabric*)calloc(1, sizeof(*fabric));
+	nd_fabric_t *fabric = (nd_fabric_t*)calloc(1, sizeof(*fabric));
 	if (!fabric)
 		return -FI_ENOMEM;
 
-	struct nd_fabric def = {
+	nd_fabric_t def = {
 		.fid = {
 			.fid = ofi_nd_fid,
 			.ops = &ofi_nd_fabric_ops

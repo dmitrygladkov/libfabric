@@ -36,12 +36,8 @@
 #define WIN32_NO_STATUS
 
 #include "netdir.h"
-#include "netdir_ov.h"
 #include "netdir_log.h"
-#include "netdir_util.h"
-#include "netdir_iface.h"
-#include "netdir_unexp.h"
-#include "netdir_cq.h"
+#include "netdir_misc.h"
 
 #include "rdma/fabric.h"
 #include "rdma/fi_endpoint.h"
@@ -49,88 +45,69 @@
 #include "ofi.h"
 #include "ofi_util.h"
 
-static int ofi_nd_ep_control(struct fid *fid, int command, void *arg);
-static int ofi_nd_ep_close(struct fid *fid);
-static int ofi_nd_ep_bind(fid_t ep, fid_t cq, uint64_t flags);
-static int ofi_nd_ep_getname(fid_t fid, void *addr, size_t *addrlen);
-static int ofi_nd_ep_getpeer(struct fid_ep *fid, void *addr, size_t *addrlen);
-static int ofi_nd_ep_connect(struct fid_ep *ep, const void *addr,
-			     const void *param, size_t paramlen);
-static int ofi_nd_ep_accept(struct fid_ep *ep, const void *param,
-			    size_t paramlen);
-static int ofi_nd_ep_shutdown(struct fid_ep *ep, uint64_t flags);
-
-static void ofi_nd_ep_disconnected_free(struct nd_event_base* base);
-static void ofi_nd_ep_disconnected(struct nd_event_base* base, DWORD bytes);
-static void ofi_nd_ep_disconnected_err(struct nd_event_base* base, DWORD bytes, DWORD err);
-static ssize_t ofi_nd_ep_cancel(fid_t fid, void *context);
-
-
-static struct fi_ops ofi_nd_fi_ops = {
-	.size = sizeof(ofi_nd_fi_ops),
-	.close = ofi_nd_ep_close,
-	.bind = ofi_nd_ep_bind,
-	.control = ofi_nd_ep_control,
-	.ops_open = fi_no_ops_open,
-};
-
-static struct fi_ops_cm ofi_nd_cm_ops = {
-	.size = sizeof(ofi_nd_cm_ops),
-	.setname = fi_no_setname,
-	.getname = ofi_nd_ep_getname,
-	.getpeer = ofi_nd_ep_getpeer,
-	.connect = fi_no_connect,
-	.listen = fi_no_listen,
-	.accept = fi_no_accept,
-	.reject = fi_no_reject,
-	.shutdown = ofi_nd_ep_shutdown,
-	.join = fi_no_join,
-};
-
 extern struct fi_ops_msg ofi_nd_ep_msg;
 extern struct fi_ops_rma ofi_nd_ep_rma;
 
-static struct fi_ops_ep ofi_nd_ep_ops = {
-	.size = sizeof(ofi_nd_ep_ops),
-	.cancel = ofi_nd_ep_cancel,
-	.getopt = fi_no_getopt,
-	.setopt = fi_no_setopt,
-	.tx_ctx = fi_no_tx_ctx,
-	.rx_ctx = fi_no_rx_ctx,
-	.rx_size_left = fi_no_rx_size_left,
-	.tx_size_left = fi_no_tx_size_left,
-};
+static struct fi_ops ofi_nd_fi_ops;
+static struct fi_ops_cm ofi_nd_cm_ops;
+static struct fi_ops_ep ofi_nd_ep_ops;
 
-typedef struct nd_ep_connect_data {
-	struct {
-		struct nd_msg_location send_res;
-	} flow_control;
+static int ofi_nd_ep_accept(struct fid_ep *pep, const void *param, size_t paramlen);
+static int ofi_nd_ep_connect(struct fid_ep *pep, const void *addr,
+			     const void *param, size_t paramlen);
+static int ofi_nd_ep_close(struct fid *fid);
+static int ofi_nd_ep_shutdown(struct fid_ep *pep, uint64_t flags);
 
-	struct {
-		void	*param;
-		size_t	paramlen;
-	} user_data;
+static void ofi_nd_ep_disconnected_free(nd_event_base_t* base)
+{
+	OFI_UNUSED(base);
+}
 
-	struct {
-		void	*data;
-		size_t	size;
-	} total_conn_data;
-} nd_ep_connect_data;
+static void ofi_nd_ep_disconnected(nd_event_base_t* base, DWORD bytes)
+{
+	OFI_UNUSED(bytes);
 
-typedef struct nd_ep_connect {
-	nd_event_base		base;
-	struct nd_ep		*ep;
-	struct nd_eq		*eq;
-	IND2Connector		*connector;
-	int			active;
-} nd_ep_connect;
+	nd_ep_t *ep = container_of(base, nd_ep_t, disconnect_ov);
+	assert(ep->fid.fid.fclass == FI_CLASS_EP);
 
-typedef struct nd_ep_completed {
-	nd_event_base	base;
-	struct nd_ep		*ep;
-	struct nd_eq		*eq;
-	IND2Connector		*connector;
-} nd_ep_completed;
+	ep->connected = 0;
+	
+	nd_eq_event_t *ev = (nd_eq_event_t*)malloc(sizeof(*ev));
+	if (!ev)
+		return;
+
+	memset(ev, 0, sizeof(*ev));
+	struct fi_eq_cm_entry *cm = (struct fi_eq_cm_entry*)&ev->operation;
+	ev->eq_event = FI_SHUTDOWN;
+	cm->fid = &ep->fid.fid;
+	ofi_nd_eq_push(ep->eq, ev);
+
+	//ofi_nd_ep_shutdown(&ep->fid, 0);
+}
+
+static void ofi_nd_ep_disconnected_err(nd_event_base_t* base, DWORD bytes,
+				       DWORD err)
+{
+	if (err == STATUS_CONNECTION_DISCONNECTED)
+	{
+		ofi_nd_ep_disconnected(base, bytes);
+	}
+	else
+	{
+		nd_ep_t *ep = container_of(base, nd_ep_t, disconnect_ov);
+
+		nd_eq_event_t *ev = (nd_eq_event_t*)malloc(sizeof(*ev));
+		if (!ev)
+			return;
+
+		memset(ev, 0, sizeof(*ev));
+		ev->eq_event = FI_SHUTDOWN;
+		ev->error.err = H2F(err);
+		ev->error.prov_errno = err;
+		ev->error.fid = &ep->fid.fid;
+		ofi_nd_eq_push_err(ep->eq, ev);
+	}
+}
 
 int ofi_nd_endpoint(struct fid_domain *pdomain, struct fi_info *info,
 	struct fid_ep **ep_fid, void *context)
@@ -141,13 +118,13 @@ int ofi_nd_endpoint(struct fid_domain *pdomain, struct fi_info *info,
 
 	HRESULT hr;
 
-	struct nd_domain *domain = container_of(pdomain, struct nd_domain, fid);
-	struct nd_connreq *connreq = 0;
-	struct nd_ep *ep = (struct nd_ep*) calloc(1, sizeof(*ep));
+	nd_domain_t *domain = container_of(pdomain, nd_domain_t, fid);
+	nd_connreq_t *connreq = 0;
+	nd_ep_t *ep = (nd_ep_t*) calloc(1, sizeof(*ep));
 	if (!ep)
 		return -FI_ENOMEM;
 
-	struct nd_ep def = {
+	nd_ep_t def = {
 		.fid = {
 			.fid = {
 				.fclass = FI_CLASS_EP,
@@ -175,11 +152,12 @@ int ofi_nd_endpoint(struct fid_domain *pdomain, struct fi_info *info,
 	ep->send_op.used_counter = 0;
 	InitializeCriticalSection(&ep->send_op.send_lock);
 
-	if (info->handle) {
+	if (info->handle)
+	{
 		assert(info->handle->fclass == FI_CLASS_CONNREQ);
 		if (info->handle->fclass != FI_CLASS_CONNREQ)
 			return -FI_EINVAL;
-		connreq = container_of(info->handle, struct nd_connreq,
+		connreq = container_of(info->handle, nd_connreq_t,
 				       handle);
 	}
 
@@ -187,13 +165,15 @@ int ofi_nd_endpoint(struct fid_domain *pdomain, struct fi_info *info,
 
 	assert(domain->adapter);
 
-	if (connreq) {
+	if (connreq)
+	{
 		assert(connreq->connector);
 		ep->connector = connreq->connector;
 		free(connreq);
 		ep->fid.cm->accept = ofi_nd_ep_accept;
 	}
-	else {
+	else
+	{
 		hr = domain->adapter->lpVtbl->CreateConnector(domain->adapter,
 							&IID_IND2Connector,
 							domain->adapter_file,
@@ -216,7 +196,7 @@ int ofi_nd_endpoint(struct fid_domain *pdomain, struct fi_info *info,
 	how CQ will be attached here */
 
 	*ep_fid = &ep->fid;
-	hr = ofi_nd_unexp_init(ep);
+	/* hr = ofi_nd_unexp_init(ep); */
 
 	return 0;
 
@@ -237,7 +217,7 @@ static int ofi_nd_ep_control(struct fid *fid, int command, void *arg)
 	if (command != FI_ENABLE)
 		return -FI_EINVAL;
 
-	struct nd_ep *ep = container_of(fid, struct nd_ep, fid.fid);
+	nd_ep_t *ep = container_of(fid, nd_ep_t, fid.fid);
 
 	if (ep->qp)
 		return FI_SUCCESS; /* already enabled */
@@ -256,8 +236,10 @@ static int ofi_nd_ep_control(struct fid *fid, int command, void *arg)
 		return H2F(hr);
 
 	/* Initialzie unexpected functionality */
+	/* it's better not to
 	InitializeCriticalSection(&ep->unexpected.unexp_lock);
 	ofi_nd_unexp_run(ep);
+	*/
 
 	return FI_SUCCESS;
 }
@@ -268,25 +250,29 @@ static int ofi_nd_ep_close(struct fid *fid)
 
 	assert(fid->fclass == FI_CLASS_EP);
 
-	struct nd_ep *ep = container_of(fid, struct nd_ep, fid.fid);
+	nd_ep_t *ep = container_of(fid, nd_ep_t, fid.fid);
 
 	ofi_nd_ep_shutdown(&ep->fid, 0);
 
 	int res;
-	if (ep->connector) {
+	if (ep->connector)
+	{
 		res = (int)ep->connector->lpVtbl->Release(ep->connector);
 		ND_LOG_DEBUG(FI_LOG_EP_CTRL, "ep->connector ref count: %d\n", res);
 	}
-	if (ep->qp) {
+
+	if (ep->qp)
+	{
 		res = (int)ep->qp->lpVtbl->Release(ep->qp);
 		ND_LOG_DEBUG(FI_LOG_EP_CTRL, "ep->qp ref count: %d\n", res);
 	}
+
 	if (ep->info)
 		fi_freeinfo(ep->info);
 
 	DeleteCriticalSection(&ep->prepost_lock);
 	/* Release Critical Section for unexpected events */
-	DeleteCriticalSection(&ep->unexpected.unexp_lock);
+	/* DeleteCriticalSection(&ep->unexpected.unexp_lock); */
 
 	/* Retrieve this endpoint from domain EP list */
 	dlist_remove(&ep->entry);
@@ -294,42 +280,58 @@ static int ofi_nd_ep_close(struct fid *fid)
 	free(ep);
 	ep = NULL;
 
-	return 0;
+	return FI_SUCCESS;
 }
 
-static void ofi_nd_ep_completed_free(nd_event_base *base)
+typedef struct nd_ep_connect {
+	nd_event_base_t		base;
+	nd_ep_t		*ep;
+	nd_eq_t		*eq;
+	IND2Connector		*connector;
+	int			active;
+} nd_ep_connect_t;
+
+typedef struct nd_ep_completed {
+	nd_event_base_t	base;
+	nd_ep_t		*ep;
+	nd_eq_t		*eq;
+	IND2Connector		*connector;
+} nd_ep_completed_t;
+
+static void ofi_nd_ep_completed_free(nd_event_base_t *base)
 {
 	assert(base);
 
-	nd_ep_completed *compl = container_of(base, nd_ep_completed, base);
+	nd_ep_completed_t *compl = container_of(base, nd_ep_completed_t, base);
 	assert(compl->connector);
 	compl->connector->lpVtbl->Release(compl->connector);
 	free(compl);
 }
 
-static void ofi_nd_ep_completed(nd_event_base *base, DWORD bytes)
+static void ofi_nd_ep_completed(nd_event_base_t *base, DWORD bytes)
 {
 	OFI_UNUSED(bytes);
 	assert(base);
 	assert(base->free);
 
-	nd_ep_completed *compl = container_of(base, nd_ep_completed, base);
+	nd_ep_completed_t *compl = container_of(base, nd_ep_completed_t, base);
 	assert(compl->connector);
 
 	base->free(base);
 }
 
-static void ofi_nd_ep_completed_err(nd_event_base *base, DWORD bytes,
+static void ofi_nd_ep_completed_err(nd_event_base_t *base, DWORD bytes,
 				    DWORD error)
 {
 	OFI_UNUSED(bytes);
 	assert(base);
 	assert(base->free);
 
-	nd_ep_completed *compl = container_of(base, nd_ep_completed, base);
+	nd_ep_completed_t *compl = container_of(base, nd_ep_completed_t, base);
 
-	struct nd_eq_event *err = (struct nd_eq_event*)malloc(sizeof(*err));
-	if (!err) {
+	nd_eq_event_t *err = (nd_eq_event_t*)malloc(sizeof(*err));
+	if (!err)
+	{
 		ND_LOG_WARN(FI_LOG_EP_CTRL,
 			   "failed to allocate error event\n");
 		base->free(base);
@@ -343,33 +345,34 @@ static void ofi_nd_ep_completed_err(nd_event_base *base, DWORD bytes,
 	ofi_nd_eq_push_err(compl->eq, err);
 }
 
-static void ofi_nd_ep_accepted_free(nd_event_base *base)
+static void ofi_nd_ep_accepted_free(nd_event_base_t *base)
 {
 	assert(base);
 
-	nd_ep_connect *connect = container_of(base, nd_ep_connect, base);
+	nd_ep_connect_t *connect = container_of(base, nd_ep_connect_t, base);
 	if (connect->connector)
 		connect->connector->lpVtbl->Release(connect->connector);
 	free(connect);
 }
 
-static void ofi_nd_ep_accepted(nd_event_base *base, DWORD bytes)
+static void ofi_nd_ep_accepted(nd_event_base_t *base, DWORD bytes)
 {
 	assert(base);
 	OFI_UNUSED(bytes);
 
 	HRESULT hr;
 	ULONG len = 0;
-	nd_ep_connect *connect = container_of(base, nd_ep_connect, base);
-	struct nd_eq_event *err;
-	nd_ep_completed *compl = NULL;
+	nd_ep_connect_t *connect = container_of(base, nd_ep_connect_t, base);
+	nd_eq_event_t *err;
+	nd_ep_completed_t *compl = NULL;
 
 	assert(connect->connector);
 	assert(connect->ep);
 	assert(connect->eq);
 
-	struct nd_eq_event *ev = (struct nd_eq_event*)malloc(sizeof(*ev));
-	if (!ev) {
+	nd_eq_event_t *ev = (nd_eq_event_t*)malloc(sizeof(*ev));
+	if (!ev)
+	{
 		hr = ND_NO_MEMORY;
 		goto fn_fail_ev;
 	}
@@ -379,19 +382,23 @@ static void ofi_nd_ep_accepted(nd_event_base *base, DWORD bytes)
 	hr = connect->connector->lpVtbl->GetPrivateData(
 		connect->connector, NULL, &len);
 
-	if (connect->active) {
+	if (connect->active)
+	{
 		hr = connect->connector->lpVtbl->GetPrivateData(
 			connect->connector, NULL, &len);
 
-		if (FAILED(hr) && hr != ND_BUFFER_OVERFLOW) {
+		if (FAILED(hr) && hr != ND_BUFFER_OVERFLOW)
+		{
 			ND_LOG_WARN(FI_LOG_EP_CTRL,
 				   "failed to get connection data\n");
 			goto fn_fail_data;
 		}
 
-		if (len) {
+		if (len)
+		{
 			ev->data = malloc(len);
-			if (!ev->data) {
+			if (!ev->data)
+			{
 				ND_LOG_WARN(FI_LOG_EP_CTRL,
 					   "failed to allocate connection data\n");
 				hr = ND_NO_MEMORY;
@@ -401,7 +408,8 @@ static void ofi_nd_ep_accepted(nd_event_base *base, DWORD bytes)
 
 			hr = connect->connector->lpVtbl->GetPrivateData(
 				connect->connector, ev->data, &len);
-			if (FAILED(hr)) {
+			if (FAILED(hr))
+			{
 				ND_LOG_WARN(FI_LOG_EP_CTRL,
 					   "failed to copy connection data\n");
 				free(ev->data);
@@ -411,8 +419,9 @@ static void ofi_nd_ep_accepted(nd_event_base *base, DWORD bytes)
 		}
 		ev->len = (size_t)len;
 
-		compl = (nd_ep_completed *)malloc(sizeof(*compl));
-		if (!compl) {
+		compl = (nd_ep_completed_t *)malloc(sizeof(*compl));
+		if (!compl)
+		{
 			ND_LOG_WARN(FI_LOG_EP_CTRL,
 				   "failed to allocate connection-complete event\n");
 			goto fn_fail_data;
@@ -428,7 +437,8 @@ static void ofi_nd_ep_accepted(nd_event_base *base, DWORD bytes)
 
 		hr = connect->connector->lpVtbl->CompleteConnect(connect->connector,
 								 &compl->base.ov);
-		if (FAILED(hr)) {
+		if (FAILED(hr))
+		{
 			ND_LOG_WARN(FI_LOG_EP_CTRL,
 				   "failed to complete connection\n");
 			free(compl);
@@ -440,7 +450,8 @@ static void ofi_nd_ep_accepted(nd_event_base *base, DWORD bytes)
 		    &connect->ep->disconnect_ov.ov);
 	hr = connect->connector->lpVtbl->NotifyDisconnect(
 		connect->connector, &connect->ep->disconnect_ov.ov);
-	if (FAILED(hr)) {
+	if (FAILED(hr))
+	{
 		ND_LOG_WARN(FI_LOG_EP_CTRL,
 			   "failed to notify disconnect\n");
 		free(compl);
@@ -451,7 +462,8 @@ static void ofi_nd_ep_accepted(nd_event_base *base, DWORD bytes)
 	cm->fid = &connect->ep->fid.fid;
 	ofi_nd_eq_push(connect->eq, ev);
 	ofi_nd_ep_accepted_free(&connect->base);
-	connect->ep->connected = 1;
+	/* TODO resolve segmentation fault below */
+	/* connect->ep->connected = 1; */
 	return;
 
 fn_fail_compl:
@@ -480,65 +492,9 @@ fn_fail_ev:
 	ofi_nd_ep_accepted_free(&connect->base);
 }
 
-static void ofi_nd_ep_rejected(nd_event_base *base, DWORD bytes, DWORD error)
+static void ofi_nd_ep_rejected(nd_event_base_t *base, DWORD bytes, DWORD error)
 {
-	assert(base);
-	OFI_UNUSED(bytes);
-
-	nd_ep_connect *connect = container_of(base, nd_ep_connect, base);
-
-	assert(connect->connector);
-	assert(connect->ep);
-	assert(connect->eq);
-
-	HRESULT hr = S_OK;
-
-	struct nd_eq_event *err = (struct nd_eq_event*)malloc(sizeof(*err));
-	if (!err) {
-		ND_LOG_WARN(FI_LOG_EP_CTRL,
-			   "failed to allocate error event\n");
-		ofi_nd_ep_accepted_free(&connect->base);
-		return;
-	}
-	memset(err, 0, sizeof(*err));
-	err->error.err = -H2F(error);
-	err->error.prov_errno = (int)error;
-	err->error.fid = &connect->ep->fid.fid;
-	ofi_nd_eq_push_err(connect->eq, err);
-
-	if (error == ND_CONNECTION_REFUSED) {
-		ULONG len = 0;
-		hr = connect->connector->lpVtbl->GetPrivateData(
-			connect->connector, NULL, &len);
-
-		if (FAILED(hr) && hr != ND_BUFFER_OVERFLOW) {
-			ND_LOG_WARN(FI_LOG_EP_CTRL,
-				   "failed to get connection data\n");
-			goto fn_complete;
-		}
-
-		if (len) {
-			err->error.err_data = malloc((size_t)len);
-			if (!err->error.err_data) {
-				ND_LOG_WARN(FI_LOG_EP_CTRL,
-					   "failed to allocate connection data\n");
-				hr = ND_NO_MEMORY;
-				goto fn_complete;
-			}
-			hr = connect->connector->lpVtbl->GetPrivateData(
-				connect->connector, err->error.err_data, &len);
-
-			if (FAILED(hr)) {
-				ND_LOG_WARN(FI_LOG_EP_CTRL,
-					   "failed to copy connection data\n");
-				goto fn_complete;
-			}
-			err->error.err_data_size = (size_t)len;
-		}
-	}
-
-fn_complete:
-	ofi_nd_ep_accepted_free(&connect->base);
+	assert(0);
 }
 
 static int ofi_nd_ep_connect(struct fid_ep *pep, const void *addr,
@@ -546,7 +502,7 @@ static int ofi_nd_ep_connect(struct fid_ep *pep, const void *addr,
 {
 	assert(pep->fid.fclass == FI_CLASS_EP);
 
-	struct nd_ep *ep = container_of(pep, struct nd_ep, fid);
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
 
 	if (!addr)
 		return -FI_EINVAL;
@@ -560,7 +516,7 @@ static int ofi_nd_ep_connect(struct fid_ep *pep, const void *addr,
 
 	HRESULT hr;
 
-	struct nd_ep_connect *wait = (struct nd_ep_connect*)malloc(sizeof(*wait));
+	nd_ep_connect_t *wait = (nd_ep_connect_t*)malloc(sizeof(*wait));
 	if (!wait)
 		return -FI_ENOMEM;
 
@@ -587,7 +543,7 @@ static int ofi_nd_ep_accept(struct fid_ep *pep, const void *param, size_t paraml
 {
 	assert(pep->fid.fclass == FI_CLASS_EP);
 
-	struct nd_ep *ep = container_of(pep, struct nd_ep, fid);
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
 
 	int res = fi_enable(&ep->fid);
 	if (res)
@@ -598,7 +554,7 @@ static int ofi_nd_ep_accept(struct fid_ep *pep, const void *param, size_t paraml
 
 	HRESULT hr;
 
-	struct nd_ep_connect *accept = (struct nd_ep_connect*)malloc(sizeof(*accept));
+	nd_ep_connect_t *accept = (nd_ep_connect_t*)malloc(sizeof(*accept));
 	if (!accept)
 		return -FI_ENOMEM;
 
@@ -627,54 +583,7 @@ static int ofi_nd_ep_accept(struct fid_ep *pep, const void *param, size_t paraml
 
 static int ofi_nd_ep_getname(fid_t fid, void *addr, size_t *addrlen)
 {
-	assert(fid && fid->fclass == FI_CLASS_EP);
-
-	if (fid->fclass != FI_CLASS_EP)
-		return -FI_EINVAL;
-
-	HRESULT hr;
-	ULONG len = (ULONG)*addrlen;
-	struct nd_ep *ep = container_of(fid, struct nd_ep, fid.fid);
-
-	if (!ep->connector)
-		return -FI_EOPBADSTATE;
-
-	hr = ep->connector->lpVtbl->GetLocalAddress(ep->connector,
-						    (struct sockaddr *)addr,
-						    &len);
-	if (*addrlen < len) {
-		ND_LOG_INFO(FI_LOG_EP_CTRL,
-			    "Provided buffer (size = %"PRIu64") is too small, required = %"PRIu64,
-			    addrlen, len);
-		*addrlen = (size_t)len;
-		return -FI_ETOOSMALL;
-	}
-	*addrlen = (size_t)len;
-
-	return H2F(hr);
-}
-
-static int ofi_nd_ep_getpeer(struct fid_ep *pep, void *addr, size_t *addrlen)
-{
-	assert(pep);
-	assert(pep->fid.fclass == FI_CLASS_EP);
-
-	if (pep->fid.fclass != FI_CLASS_EP)
-		return -FI_EINVAL;
-
-	HRESULT hr;
-	ULONG len = (ULONG)*addrlen;
-	struct nd_ep *ep = container_of(pep, struct nd_ep, fid.fid);
-
-	if (!ep->connector)
-		return -FI_EOPBADSTATE;
-
-	hr = ep->connector->lpVtbl->GetPeerAddress(ep->connector,
-		(struct sockaddr*)addr, &len);
-
-	*addrlen = (size_t)len;
-
-	return H2F(hr);
+	return -FI_ENOSYS;
 }
 
 static int ofi_nd_ep_bind(fid_t pep, fid_t bfid, uint64_t flags)
@@ -684,19 +593,22 @@ static int ofi_nd_ep_bind(fid_t pep, fid_t bfid, uint64_t flags)
 	if (pep->fclass != FI_CLASS_EP)
 		return -FI_EINVAL;
 
-	struct nd_ep *ep = container_of(pep, struct nd_ep, fid.fid);
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid.fid);
 
-	switch (bfid->fclass) {
+	switch (bfid->fclass)
+	{
 	case FI_CLASS_EQ:
-		ep->eq = container_of(bfid, struct nd_eq, fid.fid);
+		ep->eq = container_of(bfid, nd_eq_t, fid.fid);
 		return FI_SUCCESS;
 	case FI_CLASS_CQ:
-		if (flags & FI_TRANSMIT) {
-			ep->cq_send = container_of(bfid, struct nd_cq, fid.fid);
+		if (flags & FI_TRANSMIT)
+		{
+			ep->cq_send = container_of(bfid, nd_cq_t, fid.fid);
 			ep->send_flags = flags;
 		}
-		if (flags & FI_RECV) {
-			ep->cq_recv = container_of(bfid, struct nd_cq, fid.fid);
+		if (flags & FI_RECV)
+		{
+			ep->cq_recv = container_of(bfid, nd_cq_t, fid.fid);
 			ep->recv_flags = flags;
 		}
 		if (flags & FI_REMOTE_READ || flags & FI_REMOTE_WRITE)
@@ -704,128 +616,67 @@ static int ofi_nd_ep_bind(fid_t pep, fid_t bfid, uint64_t flags)
 		return FI_SUCCESS;
 	case FI_CLASS_CNTR:
 		if (flags & FI_SEND)
-			ep->cntr_send = container_of(bfid, struct nd_cntr, fid.fid);
+			ep->cntr_send = container_of(bfid, nd_cntr_t, fid.fid);
 		if (flags & FI_RECV)
-			ep->cntr_recv = container_of(bfid, struct nd_cntr, fid.fid);
+			ep->cntr_recv = container_of(bfid, nd_cntr_t, fid.fid);
 		if (flags & FI_READ)
-			ep->cntr_read = container_of(bfid, struct nd_cntr, fid.fid);
+			ep->cntr_read = container_of(bfid, nd_cntr_t, fid.fid);
 		if (flags & FI_WRITE)
-			ep->cntr_write = container_of(bfid, struct nd_cntr, fid.fid);
+			ep->cntr_write = container_of(bfid, nd_cntr_t, fid.fid);
 		if (flags & FI_REMOTE_READ || flags & FI_REMOTE_WRITE)
 			return -FI_EBADFLAGS;
 		return FI_SUCCESS;
 	case FI_CLASS_SRX_CTX:
-		ep->srx = container_of(bfid, struct nd_srx, fid.fid);
+		ep->srx = container_of(bfid, nd_srx_t, fid.fid);
 		return FI_SUCCESS;
 	default:
 		ND_LOG_WARN(FI_LOG_EP_CTRL,
 			   "ofi_nd_ep_bind: unknown bind class: %d",
 			   (int)bfid->fclass);
-		return -FI_EINVAL;
 	}
+	return -FI_EINVAL;
 }
 
 static int ofi_nd_ep_shutdown(struct fid_ep *pep, uint64_t flags)
 {
-	assert(pep);
-	assert(pep->fid.fclass == FI_CLASS_EP);
-
-	OFI_UNUSED(flags);
-
-	if (pep->fid.fclass != FI_CLASS_EP)
-		return -FI_EINVAL;
-
-	struct nd_ep *ep = container_of(pep, struct nd_ep, fid.fid);
-
-	if (!ep->qp)
-		return FI_SUCCESS;
-
-	HRESULT hr = S_OK;
-	ofi_nd_util_ov *ov = NULL;
-	if (ep->connected) {
-		ep->connected = 0;
-
-		ov = (ofi_nd_util_ov*)malloc(sizeof(*ov));
-		if (!ov)
-			return -FI_ENOMEM;
-
-		hr = ep->connector->lpVtbl->Disconnect(ep->connector, &ov->base.ov);
-		if (FAILED(hr))
-			goto fn_fail;
-
-		hr = ofi_nd_util_ov_wait(ep->connector, ov);
-	}
-
-	return H2F(hr);
-
-fn_fail:
-	if (ov)
-		free(ov);
-	return H2F(hr);
-}
-
-static void ofi_nd_ep_disconnected_free(struct nd_event_base* base)
-{
-	OFI_UNUSED(base);
-}
-
-static void ofi_nd_ep_disconnected(struct nd_event_base* base, DWORD bytes)
-{
-	OFI_UNUSED(bytes);
-
-	struct nd_ep *ep = container_of(base, struct nd_ep, disconnect_ov);
-	assert(ep->fid.fid.fclass == FI_CLASS_EP);
-
-	ep->connected = 0;
-	
-	struct nd_eq_event *ev = (struct nd_eq_event*)malloc(sizeof(*ev));
-	if (!ev) {
-		return;
-	}
-	memset(ev, 0, sizeof(*ev));
-	struct fi_eq_cm_entry *cm = (struct fi_eq_cm_entry*)&ev->operation;
-	ev->eq_event = FI_SHUTDOWN;
-	cm->fid = &ep->fid.fid;
-	ofi_nd_eq_push(ep->eq, ev);
-
-	//ofi_nd_ep_shutdown(&ep->fid, 0);
-}
-
-static void ofi_nd_ep_disconnected_err(struct nd_event_base* base, DWORD bytes,
-				       DWORD err)
-{
-	if (err == STATUS_CONNECTION_DISCONNECTED) {
-		ofi_nd_ep_disconnected(base, bytes);
-	}
-	else {
-		struct nd_ep *ep = container_of(base, struct nd_ep, disconnect_ov);
-
-		struct nd_eq_event *ev = (struct nd_eq_event*)malloc(sizeof(*ev));
-		if (!ev) {
-			return;
-		}
-		memset(ev, 0, sizeof(*ev));
-		ev->eq_event = FI_SHUTDOWN;
-		ev->error.err = H2F(err);
-		ev->error.prov_errno = err;
-		ev->error.fid = &ep->fid.fid;
-		ofi_nd_eq_push_err(ep->eq, ev);
-	}
+	return -FI_ENOSYS;
 }
 
 static ssize_t ofi_nd_ep_cancel(fid_t fid, void *context)
 {
-	assert(fid);
-	assert(fid->fclass == FI_CLASS_EP);
-	assert(context);
-
-	if (!context) {
-		ND_LOG_WARN(FI_LOG_EP_DATA, "Context is NULL \n");
-		return -FI_EINVAL;
-	}
-
-	return ofi_nd_cq_cancel(fid, context);
+	return -FI_ENOSYS;
 }
+
+static struct fi_ops ofi_nd_fi_ops = {
+	.size = sizeof(ofi_nd_fi_ops),
+	.close = ofi_nd_ep_close,
+	.bind = ofi_nd_ep_bind,
+	.control = ofi_nd_ep_control,
+	.ops_open = fi_no_ops_open,
+};
+
+static struct fi_ops_cm ofi_nd_cm_ops = {
+	.size = sizeof(ofi_nd_cm_ops),
+	.setname = fi_no_setname,
+	.getname = ofi_nd_ep_getname,
+	.connect = fi_no_connect,
+	.listen = fi_no_listen,
+	.accept = fi_no_accept,
+	.reject = fi_no_reject,
+	.shutdown = ofi_nd_ep_shutdown,
+	.join = fi_no_join,
+};
+
+static struct fi_ops_ep ofi_nd_ep_ops = {
+	.size = sizeof(ofi_nd_ep_ops),
+	.cancel = ofi_nd_ep_cancel,
+	.getopt = fi_no_getopt,
+	.setopt = fi_no_setopt,
+	.tx_ctx = fi_no_tx_ctx,
+	.rx_ctx = fi_no_rx_ctx,
+	.rx_size_left = fi_no_rx_size_left,
+	.tx_size_left = fi_no_tx_size_left,
+};
 
 #endif /* _WIN32 */
 
