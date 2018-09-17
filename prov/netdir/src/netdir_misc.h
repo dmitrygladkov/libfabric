@@ -247,4 +247,86 @@ static inline void ofi_nd_eq_push_err(nd_eq_t *eq, nd_eq_event_t *ev)
 	WakeByAddressAll((void*)&eq->count);
 }
 
+typedef enum ofi_nd_cq_state {
+	NORMAL_STATE		= 0,
+	LARGE_MSG_RECV_REQ	= 1,
+	LARGE_MSG_WAIT_ACK	= 2,
+	MAX_STATE		= 3
+} ofi_nd_cq_state_t;
+
+typedef enum ofi_nd_cq_event {
+	NORMAL_EVENT		= 0,
+	LARGE_MSG_REQ		= 1,
+	LARGE_MSG_ACK		= 2,
+	MAX_EVENT		= 3
+} ofi_nd_cq_event_t;
+
+typedef struct nd_flow_cntrl_flags {
+	unsigned req_ack : 1;
+	unsigned ack : 1;
+	unsigned empty : 1;
+} nd_flow_cntrl_flags_t;
+
+typedef struct nd_sge {
+	ND2_SGE	entries[256];
+	ULONG	count;
+} nd_sge_t;
+
+struct nd_cq_entry;
+
+typedef struct nd_send_entry {
+	nd_queue_item_t	queue_item;
+	nd_sge_t			*sge;
+	struct nd_cq_entry		*cq_entry;
+	struct nd_cq_entry		*prepost_entry;
+	nd_ep_t		*ep;
+} nd_send_entry_t;
+
+typedef struct nd_cq_entry {
+	nd_event_base_t		base;
+	nd_domain_t	*domain;
+	struct nd_msgprefix	*prefix;
+	struct nd_inlinebuf	*inline_buf;
+	struct nd_notifybuf	*notify_buf;
+	struct iovec		iov[ND_MSG_IOV_LIMIT];
+	size_t			iov_cnt;
+
+	/* used for RMA operations */
+	size_t			mr_count;
+	IND2MemoryRegion	*mr[ND_MSG_IOV_LIMIT];
+	ND2_RESULT		result;
+
+	uint64_t		flags;
+	uint64_t		seq;
+	void*			buf;
+	size_t			len;
+	uint64_t		data;
+	nd_queue_item_t	queue_item;
+	int			completed;
+	void*			context;
+
+	struct {
+		struct nd_msg_location	*locations;
+		/* != 0 only in case of large message
+		 * receiving via RMA read */
+		size_t			count;
+	} rma_location;
+	struct {
+		/* these parameters are specified in
+		 * parent's CQ entry to wait until all
+		 * read/write operation will be completed */
+		size_t comp_count;
+		size_t total_count;
+
+		CRITICAL_SECTION comp_lock;
+	} wait_completion;
+	struct nd_cq_entry	*aux_entry;
+
+	ofi_nd_cq_state_t		state;
+	ofi_nd_cq_event_t		event;
+	nd_flow_cntrl_flags_t	flow_cntrl_flags;
+	nd_send_entry_t		*send_entry;
+} nd_cq_entry_t;
+
+
 #endif

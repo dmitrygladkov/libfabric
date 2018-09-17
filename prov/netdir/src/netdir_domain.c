@@ -56,7 +56,7 @@ static int ofi_nd_domain_close(fid_t fid)
 	nd_domain_t *domain = container_of(fid, nd_domain_t, fid.fid);
 
 	DWORD ref = 0;
-
+/*
 	if (domain->cq)
 	{
 		domain->cq->lpVtbl->CancelOverlappedRequests(domain->cq);
@@ -65,6 +65,7 @@ static int ofi_nd_domain_close(fid_t fid)
 
 		domain->cq->lpVtbl->Release(domain->cq);
 	}
+*/
 	if (domain->info)
 		fi_freeinfo(domain->info);
 

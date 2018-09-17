@@ -48,13 +48,45 @@
 static ssize_t
 ofi_nd_ep_sendmsg(struct fid_ep *pep, const struct fi_msg *msg, uint64_t flags)
 {
-	return -FI_ENOSYS;
+	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	assert(ep);
+	assert(ep->qp);
+
+	ULONG len = 0UL;
+
+	for (size_t i = 0; i < msg->iov_count; i++)
+	{
+		if (msg->msg_iov[i].iov_len && !msg->msg_iov[i].iov_base)
+			return -FI_EINVAL;
+
+		len += msg->msg_iov[i].iov_len;
+	}
+
+	ND2_SGE sge = {
+		.Buffer = (msg->iov_count == 1) ? msg->msg_iov[0].iov_base : 0,
+		.BufferLength = (ULONG)len,
+		.MemoryRegionToken = msg->desc ? *(msg->desc) : NULL
+	};
+
+	HRESULT hr = ERROR_SUCCESS;
+	EnterCriticalSection(&ep->send_op.send_lock);
+
+	if (len)
+		hr = ep->qp->lpVtbl->Send(ep->qp, msg->context, &sge, 1, 0);
+	else
+		hr = ep->qp->lpVtbl->Send(ep->qp, msg->context, &sge, 1, ND_OP_FLAG_INLINE);
+
+	LeaveCriticalSection(&ep->send_op.send_lock);
+	ofi_nd_ep_progress(ep);
+	return H2F(hr);
 }
 
 static ssize_t ofi_nd_ep_inject(struct fid_ep *pep, const void *buf, size_t len,
 	fi_addr_t dest_addr)
 {
 	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	assert(ep);
+	assert(ep->qp);
 	EnterCriticalSection(&ep->send_op.send_lock);
 
 	ND2_SGE sge = {
@@ -78,14 +110,21 @@ static ssize_t ofi_nd_ep_senddata(struct fid_ep *pep, const void *buf, size_t le
 				  uint64_t data, fi_addr_t dest_addr, void *context)
 {
 	nd_ep_t *ep = container_of(pep, nd_ep_t, fid);
+	assert(ep);
+	assert(ep->qp);
 	EnterCriticalSection(&ep->send_op.send_lock);
 
 	ND2_SGE sge = {
 		.Buffer = buf,
 		.BufferLength = (ULONG)len,
-		.MemoryRegionToken = NULL
+		.MemoryRegionToken = desc
 	};
-	HRESULT hr = ep->qp->lpVtbl->Send(ep->qp, NULL, &sge, 1, ND_OP_FLAG_INLINE);
+	HRESULT hr = ERROR_SUCCESS;
+	if (len)
+		hr = ep->qp->lpVtbl->Send(ep->qp, context, &sge, 1, 0);
+	else
+		hr = ep->qp->lpVtbl->Send(ep->qp, context, &sge, 1, ND_OP_FLAG_INLINE);
+
 	LeaveCriticalSection(&ep->send_op.send_lock);
 	return H2F(hr);
 }
