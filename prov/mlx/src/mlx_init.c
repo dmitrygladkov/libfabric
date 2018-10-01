@@ -209,6 +209,12 @@ static int mlx_getinfo (
 			"MLX error: failed to switch off UCM memory hooks:\t%d (%s)\n",
 			status, ucs_status_string(status));
 	}
+	status = ucm_config_modify("RX_INLINE", "10000");
+	if (status != UCS_OK) {
+		FI_WARN( &mlx_prov, FI_LOG_CORE,
+			"MLX error: failed to switch off UCM memory hooks:\t%d (%s)\n",
+			status, ucs_status_string(status));
+	}
 
 	FI_INFO( &mlx_prov, FI_LOG_CORE,
 		"Loaded MLX version %s\n",

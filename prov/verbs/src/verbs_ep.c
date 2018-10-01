@@ -31,10 +31,26 @@
  */
 
 #include "config.h"
-
+#include <infiniband/verbs.h>
 #include "fi_verbs.h"
 
 #define VERBS_RESOLVE_TIMEOUT 2000	// ms
+
+static int ucma_find_pkey(struct ibv_context *verbs, uint8_t port_num,
+			  __be16 pkey, uint16_t *pkey_index)
+{
+   	int ret, i;
+    	__be16 chk_pkey;
+
+   for (i = 0, ret = 0; !ret; i++) {
+		ret = ibv_query_pkey(verbs, port_num, i, &chk_pkey);
+		if (!ret && pkey == chk_pkey) {
+		*pkey_index = (uint16_t) i;
+	return 0;
+}
+ }
+	return -FI_EINVAL;
+}
 
 static int fi_ibv_ep_getopt(fid_t fid, int level, int optname,
 			    void *optval, size_t *optlen)
@@ -334,6 +350,7 @@ static int fi_ibv_ep_enable(struct fid_ep *ep_fid)
 	struct fi_ibv_ep *ep;
 	struct ibv_pd *pd;
 	int ret;
+	struct ibv_exp_qp_init_attr qp_init_attr = {0};
 
 	ep = container_of(ep_fid, struct fi_ibv_ep, util_ep.ep_fid);
 	if (!ep->eq && (ep->util_ep.type == FI_EP_MSG)) {
@@ -367,9 +384,9 @@ static int fi_ibv_ep_enable(struct fid_ep *ep_fid)
 		struct fi_ibv_cq *cq =
 			container_of(ep->util_ep.tx_cq, struct fi_ibv_cq, util_cq);
 
-		attr.cap.max_send_wr = ep->info->tx_attr->size;
-		attr.cap.max_send_sge = ep->info->tx_attr->iov_limit;
-		attr.send_cq = cq->cq;
+		qp_init_attr.cap.max_send_wr = ep->info->tx_attr->size;
+		qp_init_attr.cap.max_send_sge = ep->info->tx_attr->iov_limit;
+		qp_init_attr.send_cq = cq->cq;
 		domain = container_of(ep->util_ep.tx_cq->domain, struct fi_ibv_domain,
 				      util_domain);
 		pd = domain->pd;
@@ -377,7 +394,7 @@ static int fi_ibv_ep_enable(struct fid_ep *ep_fid)
 		struct fi_ibv_cq *cq =
 			container_of(ep->util_ep.rx_cq, struct fi_ibv_cq, util_cq);
 
-		attr.send_cq = cq->cq;
+		qp_init_attr.send_cq = cq->cq;
 		domain = container_of(ep->util_ep.rx_cq->domain, struct fi_ibv_domain,
 				      util_domain);
 		pd = domain->pd;
@@ -387,41 +404,55 @@ static int fi_ibv_ep_enable(struct fid_ep *ep_fid)
 		struct fi_ibv_cq *cq =
 			container_of(ep->util_ep.rx_cq, struct fi_ibv_cq, util_cq);
 
-		attr.cap.max_recv_wr = ep->info->rx_attr->size;
-		attr.cap.max_recv_sge = ep->info->rx_attr->iov_limit;
-		attr.recv_cq = cq->cq;
+		qp_init_attr.cap.max_recv_wr = ep->info->rx_attr->size;
+		qp_init_attr.cap.max_recv_sge = ep->info->rx_attr->iov_limit;
+		qp_init_attr.recv_cq = cq->cq;
 	} else {		
 		struct fi_ibv_cq *cq =
 			container_of(ep->util_ep.tx_cq, struct fi_ibv_cq, util_cq);
 
-		attr.recv_cq = cq->cq;
+		qp_init_attr.recv_cq = cq->cq;
 	}
 
 	attr.cap.max_inline_data = ep->info->tx_attr->inject_size;
-
+	struct ibv_qp_attr qp_attr;struct ibv_qp *qp;
 	switch (ep->util_ep.type) {
 	case FI_EP_MSG:
 		if (ep->srq_ep) {
-			attr.srq = ep->srq_ep->srq;
+			qp_init_attr.srq = ep->srq_ep->srq;
 			/* Use of SRQ, no need to allocate recv_wr entries in the QP */
-			attr.cap.max_recv_wr = 0;
+			qp_init_attr.cap.max_recv_wr = 0;
 
 			/* Override the default ops to prevent the user from posting WRs to a
 			 * QP where a SRQ is attached to */
 			ep->util_ep.ep_fid.msg = &fi_ibv_msg_srq_ep_msg_ops;
 		}
 
-		attr.qp_type = IBV_QPT_RC;
-		attr.sq_sig_all = 1;
-		attr.qp_context = ep;
+		qp_init_attr.qp_type = IBV_QPT_RC;
+		qp_init_attr.sq_sig_all = 1;
+		qp_init_attr.qp_context = ep;
+		qp_init_attr.comp_mask           |= IBV_EXP_QP_INIT_ATTR_INL_RECV;
+		qp_init_attr.max_inl_recv = 64;
 
-		ret = rdma_create_qp(ep->id, pd, &attr);
+		qp = ibv_exp_create_qp(ep->id->verbs, &qp_init_attr);
+
+		ret = ucma_find_pkey(ep->id->verbs, ep->id->port_num,
+     ep->id->route.addr.addr.ibaddr.pkey,
+     &qp_attr.pkey_index);
+		qp_attr.port_num = ep->id->port_num;
+		qp_attr.qp_state = IBV_QPS_INIT;
+		qp_attr.qp_access_flags = 0;
+
+		ret = ibv_modify_qp(qp, &qp_attr, IBV_QP_STATE | IBV_QP_ACCESS_FLAGS |
+				    IBV_QP_PKEY_INDEX | IBV_QP_PORT);
 		if (ret) {
 			ret = -errno;
 			VERBS_WARN(FI_LOG_EP_CTRL, "Unable to create rdma qp: %s (%d)\n",
 				   fi_strerror(-ret), -ret);
 			return ret;
 		}
+		ep->id->pd = qp->pd;
+		ep->id->qp = qp;
 		ep->ibv_qp = ep->id->qp;
 		break;
 	case FI_EP_DGRAM:
