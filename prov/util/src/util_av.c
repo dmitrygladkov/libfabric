@@ -56,7 +56,7 @@ enum {
 	UTIL_DEFAULT_AV_SIZE = 1024,
 };
 
-static int ofi_cmap_move_handle_to_peer_list(struct util_cmap *cmap, int index);
+static int ofi_cmap_move_handle_to_peer_list(struct util_cmap *cmap, fi_addr_t fi_addr);
 
 static int fi_get_src_sockaddr(const struct sockaddr *dest_addr, size_t dest_addrlen,
 			       struct sockaddr **src_addr, size_t *src_addrlen)
@@ -231,26 +231,6 @@ int ofi_get_addr(uint32_t addr_format, uint64_t flags,
 	}
 }
 
-static void *util_av_get_data(struct util_av *av, int index)
-{
-	return (char *) av->data + (index * av->addrlen);
-}
-
-void *ofi_av_get_addr(struct util_av *av, int index)
-{
-	FI_DBG(av->prov, FI_LOG_AV, "get[%d]:%s\n", index,
-		ofi_hex_str(util_av_get_data(av, index), av->addrlen));
-	return util_av_get_data(av, index);
-}
-
-static void util_av_set_data(struct util_av *av, int index,
-			     const void *data, size_t len)
-{
-	FI_DBG(av->prov, FI_LOG_AV, "set[%d]:%s\n", index,
-		ofi_hex_str(data, len));
-	memcpy(util_av_get_data(av, index), data, len);
-}
-
 static int fi_verify_av_insert(struct util_av *av, uint64_t flags)
 {
 	if ((av->flags & FI_EVENT) && !av->eq) {
@@ -269,115 +249,47 @@ static int fi_verify_av_insert(struct util_av *av, uint64_t flags)
 /*
  * Must hold AV lock
  */
-static int util_av_hash_insert(struct util_av_hash *hash, int slot,
-			       int index, int *table_slot)
-{
-	int entry, i;
-
-	if (slot < 0 || slot >= hash->slots)
-		return -FI_EINVAL;
-
-	if (hash->table[slot].index == UTIL_NO_ENTRY) {
-		hash->table[slot].index = index;
-		if (table_slot)
-			*table_slot = slot;
-		return 0;
-	}
-
-	if (hash->free_list == UTIL_NO_ENTRY)
-		return -FI_ENOSPC;
-
-	entry = hash->free_list;
-	hash->free_list = hash->table[hash->free_list].next;
-
-	for (i = slot; hash->table[i].next != UTIL_NO_ENTRY; )
-		i = hash->table[i].next;
-
-	hash->table[i].next = entry;
-	if (table_slot)
-		*table_slot = i;
-	hash->table[entry].index = index;
-	hash->table[entry].next = UTIL_NO_ENTRY;
-	return 0;
-}
-
-/* Caller must hold `av::lock` */
-static inline
-int util_av_lookup_index(struct util_av *av, const void *addr,
-			 int slot, int *table_slot)
-{
-	int i, ret = -FI_ENODATA;
-
-	if (av->hash.table[slot].index == UTIL_NO_ENTRY) {
-		FI_DBG(av->prov, FI_LOG_AV, "no entry at slot (%d)\n", slot);
-		goto out;
-	}
-
-	for (i = slot; i != UTIL_NO_ENTRY; i = av->hash.table[i].next) {
-		if (!memcmp(ofi_av_get_addr(av, av->hash.table[i].index), addr,
-			    av->addrlen)) {
-			ret = av->hash.table[i].index;
-			if (table_slot)
-				*table_slot = i;
-			FI_DBG(av->prov, FI_LOG_AV, "entry at index (%d)\n", ret);
-			break;
-		}
-	}
-out:
-	FI_DBG(av->prov, FI_LOG_AV, "%d\n", ret);
-	return ret;
-}
-
-/*
- * Must hold AV lock
- */
-int ofi_av_insert_addr(struct util_av *av, const void *addr, int slot, int *index)
+int ofi_av_insert_addr(struct util_av *av, const void *addr, fi_addr_t *fi_addr)
 {
 	struct dlist_entry *av_entry;
 	struct util_ep *ep;
 	int ret;
-
-	if (OFI_UNLIKELY(av->free_list == UTIL_NO_ENTRY)) {
-		FI_WARN(av->prov, FI_LOG_AV, "AV is full\n");
-		return -FI_ENOSPC;
-	}
+	struct util_av_entry *entry = NULL;
 
 	if (av->flags & OFI_AV_HASH) {
-		int table_slot;
-
-		if (OFI_UNLIKELY(slot < 0 || slot >= av->hash.slots)) {
-			FI_WARN(av->prov, FI_LOG_AV, "invalid slot (%d)\n", slot);
-			return -FI_EINVAL;
+		HASH_FIND(hh, av->av_hash.hash, &addr, av->addrlen, entry);
+		if (entry) {
+			*fi_addr = util_get_buf_index(av->av_entry_pool, entry);
+		} else {
+			entry = util_buf_alloc(av->av_entry_pool);
+			if (!entry)
+				return -FI_ENOMEM;
+			*fi_addr = util_get_buf_index(av->av_entry_pool, entry);
+			memcpy(entry->addr, addr, av->addrlen);
+			ofi_atomic_initialize32(&entry->use_cnt, 0);
+			HASH_ADD(hh, av->av_hash.hash, addr, av->addrlen, entry);
 		}
-		ret = util_av_lookup_index(av, addr, slot, &table_slot);
-		if (ret != -FI_ENODATA) {
-			*index = ret;
-			ofi_atomic_inc32(&av->hash.table[table_slot].use_cnt);
-			return 0;
-		}
-		ret = util_av_hash_insert(&av->hash, slot, av->free_list,
-					  &table_slot);
-		if (ret) {
-			FI_WARN(av->prov, FI_LOG_AV,
-				"failed to insert addr into hash table\n");
-			return ret;
-		}
-		ofi_atomic_inc32(&av->hash.table[table_slot].use_cnt);
+		ofi_atomic_inc32(&entry->use_cnt);
 	}
 
-	*index = av->free_list;
-	av->free_list = *(int *) util_av_get_data(av, av->free_list);
-	util_av_set_data(av, *index, addr, av->addrlen);
+	if (!entry) {
+		entry = util_buf_alloc(av->av_entry_pool);
+		if (!entry)
+			return -FI_ENOMEM;
+		*fi_addr = util_get_buf_index(av->av_entry_pool, entry);
+		memcpy(entry->addr, addr, av->addrlen);
+		ofi_atomic_initialize32(&entry->use_cnt, 1);
+	}
 
 	dlist_foreach(&av->ep_list, av_entry) {
 		ep = container_of(av_entry, struct util_ep, av_entry);
 		if (ep->cmap) {
-			ret = ofi_cmap_update(ep->cmap, addr, (fi_addr_t)(*index));
+			ret = ofi_cmap_update(ep->cmap, addr, *fi_addr);
 			if (OFI_UNLIKELY(ret)) {
 				int retv;
 				FI_WARN(av->prov, FI_LOG_AV,
 					"Unable to update CM for OFI endpoints\n");
-				retv = ofi_av_remove_addr(av, slot, *index);
+				retv = ofi_av_remove_addr(av, *fi_addr);
 				if (retv)
 					FI_WARN(av->prov, FI_LOG_AV,
 						"Failed to remove addr from AV during error handling\n");
@@ -388,122 +300,55 @@ int ofi_av_insert_addr(struct util_av *av, const void *addr, int slot, int *inde
 	return 0;
 }
 
-static inline int
-util_av_hash_lookup_table_slot(struct util_av_hash *hash, int slot, int index)
-{
-	int i;
-
-	if (hash->table[slot].index == index) {
-		return slot;
-	} else {
-		for (i = slot; hash->table[i].index != index; )
-			i = hash->table[i].next;
-		return i;
-	}
-}
-
 /*
  * Must hold AV lock
  */
-static void util_av_hash_remove(struct util_av_hash *hash, int slot, int index)
-{
-	int table_slot, slot_next;
-
-	if (OFI_UNLIKELY(slot < 0 || slot >= hash->slots))
-		return;
-
-	table_slot = util_av_hash_lookup_table_slot(hash, slot, index);
-	if (table_slot == slot) {
-		if (hash->table[table_slot].next == UTIL_NO_ENTRY) {
-			hash->table[table_slot].index = UTIL_NO_ENTRY;
-			return;
-		}
-	}
-
-	slot_next = hash->table[slot].next;
-	hash->table[slot] = hash->table[slot_next];
-
-	hash->table[slot_next].next = hash->free_list;
-	hash->free_list = slot_next;
-}
-
-/*
- * Must hold AV lock
- */
-int ofi_av_remove_addr(struct util_av *av, int slot, int index)
+int ofi_av_remove_addr(struct util_av *av, fi_addr_t fi_addr)
 {
 	struct util_ep *ep;
-	int *entry, *next, i;
 	int ret = 0;
-
-	if (OFI_UNLIKELY(index < 0 || (size_t)index > av->count)) {
-		FI_WARN(av->prov, FI_LOG_AV, "index out of range\n");
-		return -FI_EINVAL;
-	}
-
-	if (av->flags & OFI_AV_HASH) {
-		int table_slot;
-
-		if (OFI_UNLIKELY(slot < 0 || slot >= av->hash.slots)) {
-			FI_WARN(av->prov, FI_LOG_AV, "invalid slot (%d)\n", slot);
-			return -FI_EINVAL;
-		}
-
-		table_slot = util_av_hash_lookup_table_slot(&av->hash, slot, index);
-		if (ofi_atomic_dec32(&av->hash.table[table_slot].use_cnt))
-			return FI_SUCCESS;
-	}
+	struct util_av_entry *av_entry =
+		util_buf_get_by_index(av->av_entry_pool, fi_addr);
+	if (!av_entry)
+		return ret;
 
 	/* This should stay at top */
-	dlist_foreach_container(&av->ep_list, struct util_ep, ep, av_entry) {
-		if (ep->cmap && ep->cmap->handles_av[index]) {
-			/* TODO this is not optimal. Replace this with something
-			 * more deterministic: delete handle if we know that peer
-			 * isn't actively communicating with us
-			 */
-			ret = ofi_cmap_move_handle_to_peer_list(ep->cmap, index);
-			if (ret) {
-				FI_WARN(av->prov, FI_LOG_DOMAIN, "Unable to move"
-					" handle to peer list. Deleting it.\n");
-				ofi_cmap_del_handle(ep->cmap->handles_av[index]);
-				return ret;
+	dlist_foreach_container(&av->ep_list, struct util_ep,
+				ep, av_entry) {
+		if (ep->cmap) {
+			if (ep->cmap->av_handle_table[fi_addr]) {
+				/* TODO this is not optimal. Replace this with something
+				 * more deterministic: delete handle if we know that peer
+				 * isn't actively communicating with us */
+				ret = ofi_cmap_move_handle_to_peer_list(ep->cmap, fi_addr);
+				if (ret) {
+					FI_WARN(av->prov, FI_LOG_DOMAIN, "Unable to move"
+						" handle to peer list. Deleting it.\n");
+					ofi_cmap_del_handle(ep->cmap->av_handle_table[fi_addr]);
+					return ret;
+				}
 			}
 		}
 	}
 
-	if (av->flags & OFI_AV_HASH)
-		util_av_hash_remove(&av->hash, slot, index);
-
-	entry = util_av_get_data(av, index);
-	if (av->free_list == UTIL_NO_ENTRY || index < av->free_list) {
-		*entry = av->free_list;
-		av->free_list = index;
-	} else {
-		i = av->free_list;
-		for (next = util_av_get_data(av, i); index > *next;) {
-			i = *next;
-			next = util_av_get_data(av, i);
-		}
-		util_av_set_data(av, index, next, sizeof index);
-		*next = index;
-	}
+	util_buf_release(av->av_entry_pool, av_entry);
 
 	return ret;
 }
 
-int ofi_av_lookup_index(struct util_av *av, const void *addr, int slot)
+fi_addr_t ofi_av_lookup_fi_addr(struct util_av *av, const void *addr)
 {
-	int ret;
-
-	if (OFI_UNLIKELY(slot < 0 || slot >= av->hash.slots)) {
-		FI_WARN(av->prov, FI_LOG_AV, "invalid slot (%d)\n", slot);
-		return -FI_EINVAL;
-	}
+	fi_addr_t fi_addr = FI_ADDR_NOTAVAIL;
+	struct util_av_entry *entry;
 
 	fastlock_acquire(&av->lock);
-	ret = util_av_lookup_index(av, addr, slot, NULL);
+	HASH_FIND(hh, av->av_hash.hash, &addr, av->addrlen, entry);
+	if (entry) {
+		fi_addr = util_get_buf_index(av->av_entry_pool, entry);
+	}
 	fastlock_release(&av->lock);
-	return ret;
+
+	return fi_addr;
 }
 
 int ofi_av_bind(struct fid *av_fid, struct fid *eq_fid, uint64_t flags)
@@ -530,8 +375,7 @@ int ofi_av_bind(struct fid *av_fid, struct fid *eq_fid, uint64_t flags)
 
 static void util_av_close(struct util_av *av)
 {
-	/* TODO: unmap data? */
-	free(av->data);
+	util_buf_pool_destroy(av->av_entry_pool);
 }
 
 int ofi_av_close_lightweight(struct util_av *av)
@@ -559,25 +403,6 @@ int ofi_av_close(struct util_av *av)
 	return 0;
 }
 
-static void util_av_hash_init(struct util_av_hash *hash)
-{
-	int i;
-
-	for (i = 0; i < hash->slots; i++) {
-		hash->table[i].index = UTIL_NO_ENTRY;
-		hash->table[i].next = UTIL_NO_ENTRY;
-		ofi_atomic_initialize32(&hash->table[i].use_cnt, 0);
-	}
-
-	hash->free_list = hash->slots;
-	for (i = hash->slots; i < hash->total_count; i++) {
-		hash->table[i].index = UTIL_NO_ENTRY;
-		hash->table[i].next = i + 1;
-		ofi_atomic_initialize32(&hash->table[i].use_cnt, 0);
-	}
-	hash->table[hash->total_count - 1].next = UTIL_NO_ENTRY;
-}
-
 static int util_verify_av_util_attr(struct util_domain *domain,
 				    const struct util_av_attr *util_attr)
 {
@@ -597,8 +422,16 @@ static int util_verify_av_util_attr(struct util_domain *domain,
 static int util_av_init(struct util_av *av, const struct fi_av_attr *attr,
 			const struct util_av_attr *util_attr)
 {
-	int *entry, i, ret = 0;
+	int ret = 0;
 	size_t max_count;
+	struct util_buf_attr pool_attr = {
+		.size		= util_attr->addrlen +
+				  sizeof(struct util_av_entry),
+		.alignment	= 16,
+		.max_cnt	= 0,
+		.track_used	= 0,
+		.use_ftr	= 1,
+	};
 
 	ret = util_verify_av_util_attr(av->domain, util_attr);
 	if (ret)
@@ -618,34 +451,18 @@ static int util_av_init(struct util_av *av, const struct fi_av_attr *attr,
 
 	FI_INFO(av->prov, FI_LOG_AV, "AV size %zu\n", av->count);
 
+	pool_attr.chunk_cnt = av->count;
+	ret = util_buf_pool_create_attr(&pool_attr, &av->av_entry_pool);
+	if (ret) {
+		return ret;
+	}
+
 	/* TODO: Handle FI_READ */
 	/* TODO: Handle mmap - shared AV */
 
 	if (util_attr->flags & OFI_AV_HASH) {
-		av->hash.slots = av->count;
-		if (util_attr->overhead)
-			av->hash.total_count = av->count + util_attr->overhead;
-		else
-			av->hash.total_count = av->count * 2;
-		FI_INFO(av->prov, FI_LOG_AV,
-		       "OFI_AV_HASH requested, hash size %u\n", av->hash.total_count);
-	}
-
-	av->data = malloc((av->count * util_attr->addrlen) +
-			  (av->hash.total_count * sizeof(*av->hash.table)));
-	if (!av->data)
-		return -FI_ENOMEM;
-
-	for (i = 0; i < (int)av->count - 1; i++) {
-		entry = util_av_get_data(av, i);
-		*entry = i + 1;
-	}
-	entry = util_av_get_data(av, av->count - 1);
-	*entry = UTIL_NO_ENTRY;
-
-	if (util_attr->flags & OFI_AV_HASH) {
-		av->hash.table = util_av_get_data(av, av->count);
-		util_av_hash_init(&av->hash);
+		av->av_hash.av = av;
+		av->av_hash.hash = NULL;
 	}
 
 	return ret;
@@ -727,39 +544,9 @@ int ofi_av_init(struct util_domain *domain, const struct fi_av_attr *attr,
  *
  *************************************************************************/
 
-static int ip_av_slot(struct util_av *av, const struct sockaddr *sa)
+fi_addr_t ip_av_get_fi_addr(struct util_av *av, const void *addr)
 {
-	uint32_t host;
-	uint16_t port;
-
-	if (!sa)
-		return UTIL_NO_ENTRY;
-
-	switch (((struct sockaddr *) sa)->sa_family) {
-	case AF_INET:
-		host = (uint16_t) ntohl(((struct sockaddr_in *) sa)->
-					sin_addr.s_addr);
-		port = ntohs(((struct sockaddr_in *) sa)->sin_port);
-		break;
-	case AF_INET6:
-		host = (uint16_t) ((struct sockaddr_in6 *) sa)->
-					sin6_addr.s6_addr[15];
-		port = ntohs(((struct sockaddr_in6 *) sa)->sin6_port);
-		break;
-	default:
-		assert(0);
-		return UTIL_NO_ENTRY;
-	}
-
-	/* TODO: Find a good hash function */
-	FI_DBG(av->prov, FI_LOG_AV, "slot %d\n",
-		((host << 16) | port) % av->hash.slots);
-	return ((host << 16) | port) % av->hash.slots;
-}
-
-int ip_av_get_index(struct util_av *av, const void *addr)
-{
-	return ofi_av_lookup_index(av, addr, ip_av_slot(av, addr));
+	return ofi_av_lookup_fi_addr(av, addr);
 }
 
 void ofi_av_write_event(struct util_av *av, uint64_t data,
@@ -810,11 +597,12 @@ static int ip_av_valid_addr(struct util_av *av, const void *addr)
 static int ip_av_insert_addr(struct util_av *av, const void *addr,
 			     fi_addr_t *fi_addr, void *context)
 {
-	int ret, index = -1;
+	int ret;
+	fi_addr_t fi_addr_ret;
 
 	if (ip_av_valid_addr(av, addr)) {
 		fastlock_acquire(&av->lock);
-		ret = ofi_av_insert_addr(av, addr, ip_av_slot(av, addr), &index);
+		ret = ofi_av_insert_addr(av, addr, &fi_addr_ret);
 		fastlock_release(&av->lock);
 	} else {
 		ret = -FI_EADDRNOTAVAIL;
@@ -822,7 +610,7 @@ static int ip_av_insert_addr(struct util_av *av, const void *addr,
 	}
 
 	if (fi_addr)
-		*fi_addr = !ret ? index : FI_ADDR_NOTAVAIL;
+		*fi_addr = !ret ? fi_addr_ret : FI_ADDR_NOTAVAIL;
 
 	ofi_straddr_dbg(av->prov, FI_LOG_AV, "av_insert addr", addr);
 	if (fi_addr)
@@ -1066,11 +854,11 @@ out:
 	return ret;
 }
 
-static int ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr, size_t count,
-			uint64_t flags)
+static int ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
+			size_t count, uint64_t flags)
 {
 	struct util_av *av;
-	int i, slot, index, ret;
+	int i, ret;
 
 	av = container_of(av_fid, struct util_av, av_fid);
 	if (flags) {
@@ -1085,14 +873,13 @@ static int ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr, size_t count,
 	 * Thus, we walk through the array backwards.
 	 */
 	for (i = count - 1; i >= 0; i--) {
-		index = (int) fi_addr[i];
-		slot = ip_av_slot(av, ip_av_get_addr(av, index));
 		fastlock_acquire(&av->lock);
-		ret = ofi_av_remove_addr(av, slot, index);
+		ret = ofi_av_remove_addr(av, fi_addr[i]);
 		fastlock_release(&av->lock);
 		if (ret) {
 			FI_WARN(av->prov, FI_LOG_AV,
-				"removal of fi_addr %d failed\n", index);
+				"removal of fi_addr %"PRIu64" failed\n",
+				fi_addr[i]);
 		}
 	}
 	return 0;
@@ -1101,18 +888,12 @@ static int ip_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr, size_t count,
 static int ip_av_lookup(struct fid_av *av_fid, fi_addr_t fi_addr, void *addr,
 			size_t *addrlen)
 {
-	struct util_av *av;
-	int index;
+	struct util_av *av =
+		container_of(av_fid, struct util_av, av_fid);
+	struct util_av_entry *av_entry =
+		util_buf_get_by_index(av->av_entry_pool, fi_addr);
 
-	av = container_of(av_fid, struct util_av, av_fid);
-	index = (int) fi_addr;
-	if (index < 0 || (size_t)index > av->count) {
-		FI_WARN(av->prov, FI_LOG_AV, "unknown address\n");
-		return -FI_EINVAL;
-	}
-
-	memcpy(addr, ip_av_get_addr(av, index),
-	       MIN(*addrlen, av->addrlen));
+	memcpy(addr, av_entry->addr, MIN(*addrlen, av->addrlen));
 	*addrlen = av->addrlen;
 	return 0;
 }
@@ -1205,38 +986,23 @@ int ip_av_create(struct fid_domain *domain_fid, struct fi_av_attr *attr,
  * Connection map
  */
 
-/* Caller should hold cmap->lock */
-static void util_cmap_set_key(struct util_cmap_handle *handle)
-{
-	handle->key = ofi_idx2key(&handle->cmap->key_idx,
-		ofi_idx_insert(&handle->cmap->handles_idx, handle));
-}
-
-/* Caller should hold cmap->lock */
-static void util_cmap_clear_key(struct util_cmap_handle *handle)
-{
-	int index = ofi_key2idx(&handle->cmap->key_idx, handle->key);
-
-	if (!ofi_idx_is_valid(&handle->cmap->handles_idx, index))
-		FI_WARN(handle->cmap->av->prov, FI_LOG_AV, "Invalid key!\n");
-	else
-		ofi_idx_remove(&handle->cmap->handles_idx, index);
-}
-
 struct util_cmap_handle *ofi_cmap_key2handle(struct util_cmap *cmap, uint64_t key)
 {
-	struct util_cmap_handle *handle;
+	struct util_cmap_handle *handle =
+		(struct util_cmap_handle *)(uintptr_t)key;
 
 	cmap->acquire(&cmap->lock);
-	if (!(handle = ofi_idx_lookup(&cmap->handles_idx,
-				      ofi_key2idx(&cmap->key_idx, key)))) {
-		FI_WARN(cmap->av->prov, FI_LOG_AV, "Invalid key!\n");
-	} else {
-		if (handle->key != key) {
+	if (OFI_LIKELY(handle != NULL)) {
+#ifdef ENABLE_DEBUG
+		if ((handle->key != key)) {
 			FI_WARN(cmap->av->prov, FI_LOG_AV,
 				"handle->key not matching given key\n");
 			handle = NULL;
 		}
+#endif
+	} else {
+		FI_WARN(cmap->av->prov, FI_LOG_AV,
+			"Invalid key (%"PRIu64")!\n", key);
 	}
 	cmap->release(&cmap->lock);
 	return handle;
@@ -1251,16 +1017,17 @@ static void util_cmap_init_handle(struct util_cmap_handle *handle,
 {
 	handle->cmap = cmap;
 	handle->state = state;
-	util_cmap_set_key(handle);
 	handle->fi_addr = fi_addr;
 	handle->peer = peer;
+	handle->key = handle;
+	if (fi_addr != FI_ADDR_NOTAVAIL)
+		cmap->av_handle_table[fi_addr] = handle;
 }
 
 static int util_cmap_match_peer(struct dlist_entry *entry, const void *addr)
 {
-	struct util_cmap_peer *peer;
-
-	peer = container_of(entry, struct util_cmap_peer, entry);
+	struct util_cmap_peer *peer =
+		container_of(entry, struct util_cmap_peer, entry);
 	return !memcmp(peer->addr, addr, peer->handle->cmap->av->addrlen);
 }
 
@@ -1277,9 +1044,10 @@ static int util_cmap_del_handle(struct util_cmap_handle *handle)
 		free(handle->peer);
 		handle->peer = NULL;
 	} else {
-		cmap->handles_av[handle->fi_addr] = 0;
+		if (handle->fi_addr != FI_ADDR_NOTAVAIL) {
+		    cmap->av_handle_table[handle->fi_addr] = NULL;
+		}
 	}
-	util_cmap_clear_key(handle);
 
 	handle->state = CMAP_SHUTDOWN;
 	/* Signal CM thread to delete the handle. This is required
@@ -1314,7 +1082,6 @@ int util_cmap_alloc_handle(struct util_cmap *cmap, fi_addr_t fi_addr,
 	FI_DBG(cmap->av->prov, FI_LOG_EP_CTRL, "Allocated handle: %p for "
 	       "fi_addr: %" PRIu64 "\n", *handle, fi_addr);
 	util_cmap_init_handle(*handle, cmap, state, fi_addr, NULL);
-	cmap->handles_av[fi_addr] = *handle;
 	return 0;
 }
 
@@ -1351,8 +1118,7 @@ util_cmap_get_handle_peer(struct util_cmap *cmap, const void *addr)
 	struct util_cmap_peer *peer;
 	struct dlist_entry *entry;
 
-	entry = dlist_find_first_match(&cmap->peer_list, util_cmap_match_peer,
-				       addr);
+	entry = dlist_find_first_match(&cmap->peer_list, util_cmap_match_peer, addr);
 	if (!entry)
 		return NULL;
 	ofi_straddr_dbg(cmap->av->prov, FI_LOG_AV, "handle found in peer list"
@@ -1361,9 +1127,11 @@ util_cmap_get_handle_peer(struct util_cmap *cmap, const void *addr)
 	return peer->handle;
 }
 
-static int ofi_cmap_move_handle_to_peer_list(struct util_cmap *cmap, int index)
+static int ofi_cmap_move_handle_to_peer_list(struct util_cmap *cmap, fi_addr_t fi_addr)
 {
-	struct util_cmap_handle *handle = cmap->handles_av[index];
+	struct util_cmap_handle *handle = cmap->av_handle_table[fi_addr];
+	struct util_av_entry *av_entry =
+		util_buf_get_by_index(cmap->av->av_entry_pool, fi_addr);
 	int ret = 0;
 
 	cmap->acquire(&cmap->lock);
@@ -1376,8 +1144,7 @@ static int ofi_cmap_move_handle_to_peer_list(struct util_cmap *cmap, int index)
 		goto unlock;
 	}
 	handle->peer->handle = handle;
-	memcpy(handle->peer->addr, ofi_av_get_addr(cmap->av, index),
-	       cmap->av->addrlen);
+	memcpy(handle->peer->addr, av_entry->addr, cmap->av->addrlen);
 	dlist_insert_tail(&handle->peer->entry, &cmap->peer_list);
 unlock:
 	cmap->release(&cmap->lock);
@@ -1392,7 +1159,7 @@ static void util_cmap_move_handle(struct util_cmap_handle *handle,
 	free(handle->peer);
 	handle->peer = NULL;
 	handle->fi_addr = fi_addr;
-	handle->cmap->handles_av[fi_addr] = handle;
+	handle->cmap->av_handle_table[fi_addr] = handle;
 }
 
 int ofi_cmap_update(struct util_cmap *cmap, const void *addr, fi_addr_t fi_addr)
@@ -1501,7 +1268,8 @@ int ofi_cmap_process_connreq(struct util_cmap *cmap, void *addr,
 			     enum util_cmap_reject_flag *cm_reject_flag)
 {
 	struct util_cmap_handle *handle;
-	int ret = 0, index, cmp;
+	int ret = 0, cmp;
+	fi_addr_t fi_addr;
 
 	/* Reset flag to initial state */
 	*cm_reject_flag = CMAP_REJECT_GENUINE;
@@ -1509,21 +1277,22 @@ int ofi_cmap_process_connreq(struct util_cmap *cmap, void *addr,
 	ofi_straddr_dbg(cmap->av->prov, FI_LOG_EP_CTRL,
 			"Processing connreq for addr", addr);
 
-	index = ip_av_get_index(cmap->av, addr);
+	fi_addr = ip_av_get_fi_addr(cmap->av, addr);
 
 	cmap->acquire(&cmap->lock);
-	if (index < 0)
+	if (fi_addr == FI_ADDR_NOTAVAIL)
 		handle = util_cmap_get_handle_peer(cmap, addr);
-	else
-		handle = ofi_cmap_acquire_handle(cmap, (fi_addr_t)index);
+	else {
+		handle = ofi_cmap_acquire_handle(cmap, fi_addr);
+	}
 
 	if (!handle) {
-		if (index < 0)
+		if (fi_addr == FI_ADDR_NOTAVAIL)
 			ret = util_cmap_alloc_handle_peer(cmap, addr,
 							  CMAP_CONNREQ_RECV,
 							  &handle);
 		else
-			ret = util_cmap_alloc_handle(cmap, (fi_addr_t)index,
+			ret = util_cmap_alloc_handle(cmap, fi_addr,
 						     CMAP_CONNREQ_RECV,
 						     &handle);
 		if (ret)
@@ -1567,8 +1336,8 @@ int ofi_cmap_process_connreq(struct util_cmap *cmap, void *addr,
 							  &handle);
 			if (ret)
 				goto unlock;
-			assert(index >= 0 && index != FI_ADDR_NOTAVAIL);
-			handle->fi_addr = index;
+			assert(fi_addr != FI_ADDR_NOTAVAIL);
+			handle->fi_addr = fi_addr;
 		}
 		/* Fall through */
 	case CMAP_IDLE:
@@ -1593,6 +1362,7 @@ int ofi_cmap_handle_connect(struct util_cmap *cmap, fi_addr_t fi_addr,
 			    struct util_cmap_handle *handle)
 {
 	int ret;
+	struct util_av_entry *av_entry;
 
 	if (handle->state == CMAP_CONNECTED_NOTIFY ||
 	    handle->state == CMAP_CONNECTED)
@@ -1600,8 +1370,9 @@ int ofi_cmap_handle_connect(struct util_cmap *cmap, fi_addr_t fi_addr,
 
 	switch (handle->state) {
 	case CMAP_IDLE:
-		ret = cmap->attr.connect(cmap->ep, handle,
-					 ofi_av_get_addr(cmap->av, fi_addr),
+		av_entry = util_buf_get_by_index(cmap->av->av_entry_pool, fi_addr);
+		assert(av_entry);
+		ret = cmap->attr.connect(cmap->ep, handle, av_entry->addr,
 					 cmap->av->addrlen);
 		if (ret) {
 			util_cmap_del_handle(handle);
@@ -1673,12 +1444,13 @@ void ofi_cmap_free(struct util_cmap *cmap)
 	size_t i;
 
 	cmap->acquire(&cmap->lock);
-	FI_DBG(cmap->av->prov, FI_LOG_EP_CTRL, "Closing cmap\n");
+	FI_DBG(cmap->av->prov, FI_LOG_EP_CTRL, "Closing cmap, size - %d\n",
+	       cmap->av->count);
 	for (i = 0; i < cmap->av->count; i++) {
-		if (cmap->handles_av[i])
-			util_cmap_del_handle(cmap->handles_av[i]);
+		if (cmap->av_handle_table[i])
+			util_cmap_del_handle(cmap->av_handle_table[i]);
 	}
-	while(!dlist_empty(&cmap->peer_list)) {
+	while (!dlist_empty(&cmap->peer_list)) {
 		entry = cmap->peer_list.next;
 		peer = container_of(entry, struct util_cmap_peer, entry);
 		util_cmap_del_handle(peer->handle);
@@ -1690,9 +1462,8 @@ void ofi_cmap_free(struct util_cmap *cmap)
 	if (cmap->attr.cleanup) {
 		cmap->attr.cleanup(cmap->ep);
 	}
-	free(cmap->handles_av);
+	free(cmap->av_handle_table);
 	free(cmap->attr.name);
-	ofi_idx_reset(&cmap->handles_idx);
 	if (!cmap->attr.serial_access)
 		fastlock_destroy(&cmap->lock);
 	free(cmap);
@@ -1710,17 +1481,13 @@ struct util_cmap *ofi_cmap_alloc(struct util_ep *ep,
 	cmap->ep = ep;
 	cmap->av = ep->av;
 
-	cmap->handles_av = calloc(cmap->av->count, sizeof(*cmap->handles_av));
-	if (!cmap->handles_av)
-		goto err1;
+	cmap->av_handle_table = calloc(cmap->av->count,
+				       sizeof(**cmap->av_handle_table));
 
 	cmap->attr = *attr;
 	cmap->attr.name = mem_dup(attr->name, ep->av->addrlen);
 	if (!cmap->attr.name)
-		goto err2;
-
-	memset(&cmap->handles_idx, 0, sizeof(cmap->handles_idx));
-	ofi_key_idx_init(&cmap->key_idx, UTIL_CMAP_IDX_BITS);
+		goto err1;
 
 	dlist_init(&cmap->peer_list);
 
@@ -1728,7 +1495,7 @@ struct util_cmap *ofi_cmap_alloc(struct util_ep *ep,
 			   cmap->attr.cm_thread_func, ep)) {
 		FI_WARN(ep->av->prov, FI_LOG_FABRIC,
 			"Unable to create cmap thread\n");
-		goto err3;
+		goto err2;
 	}
 
 	if (cmap->attr.serial_access) {
@@ -1740,10 +1507,8 @@ struct util_cmap *ofi_cmap_alloc(struct util_ep *ep,
 		cmap->release = ofi_fastlock_release;
 	}
 	return cmap;
-err3:
-	free(cmap->attr.name);
 err2:
-	free(cmap->handles_av);
+	free(cmap->attr.name);
 err1:
 	free(cmap);
 	return NULL;

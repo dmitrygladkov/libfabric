@@ -370,6 +370,8 @@ static inline size_t util_get_buf_index(struct util_buf_pool *pool, void *buf)
 }
 static inline void *util_buf_get_by_index(struct util_buf_pool *pool, size_t index)
 {
+    fprintf(stderr, "%d - %d \n", index / pool->attr.chunk_cnt,
+	    (index % pool->attr.chunk_cnt) * pool->entry_sz);
 	return (union util_buf *)(pool->regions_table[
 		(size_t)(index / pool->attr.chunk_cnt)]->mem_region +
 		(index % pool->attr.chunk_cnt) * pool->entry_sz);

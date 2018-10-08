@@ -65,6 +65,8 @@
 #include <ofi_proto.h>
 
 #include "rbtree.h"
+#include "uthash.h"
+#include "utarray.h"
 
 #define UTIL_FLAG_ERROR		(1ULL << 60)
 #define UTIL_FLAG_OVERFLOW	(1ULL << 61)
@@ -621,17 +623,17 @@ static inline void ofi_cntr_inc(struct util_cntr *cntr)
 /*
  * AV / addressing
  */
-struct util_av_hash_entry {
-	int			index;
+
+struct util_av_entry {
+	struct util_buf_header	header;
 	ofi_atomic32_t		use_cnt;
-	int			next;
+	UT_hash_handle 		hh;
+	char			addr[0];
 };
 
 struct util_av_hash {
-	struct util_av_hash_entry *table;
-	int			free_list;
-	int			slots;
-	int			total_count;
+	struct util_av		*av;
+	struct util_av_entry	*hash;
 };
 
 struct util_av {
@@ -642,13 +644,13 @@ struct util_av {
 	fastlock_t		lock;
 	const struct fi_provider *prov;
 
+	struct util_av_hash	av_hash;
+	struct util_buf_pool	*av_entry_pool;
+
 	void			*context;
 	uint64_t		flags;
 	size_t			count;
 	size_t			addrlen;
-	ssize_t			free_list;
-	struct util_av_hash	hash;
-	void			*data;
 	struct dlist_entry	ep_list;
 };
 
@@ -668,9 +670,9 @@ int ofi_av_init_lightweight(struct util_domain *domain, const struct fi_av_attr 
 int ofi_av_close(struct util_av *av);
 int ofi_av_close_lightweight(struct util_av *av);
 
-int ofi_av_insert_addr(struct util_av *av, const void *addr, int slot, int *index);
-int ofi_av_remove_addr(struct util_av *av, int slot, int index);
-int ofi_av_lookup_index(struct util_av *av, const void *addr, int slot);
+int ofi_av_insert_addr(struct util_av *av, const void *addr, fi_addr_t *fi_addr);
+int ofi_av_remove_addr(struct util_av *av, fi_addr_t fi_addr);
+fi_addr_t ofi_av_lookup_fi_addr(struct util_av *av, const void *addr);
 int ofi_av_bind(struct fid *av_fid, struct fid *eq_fid, uint64_t flags);
 void ofi_av_write_event(struct util_av *av, uint64_t data,
 			int err, void *context);
@@ -682,7 +684,7 @@ int ip_av_create_flags(struct fid_domain *domain_fid, struct fi_av_attr *attr,
 
 void *ofi_av_get_addr(struct util_av *av, int index);
 #define ip_av_get_addr ofi_av_get_addr
-int ip_av_get_index(struct util_av *av, const void *addr);
+fi_addr_t ip_av_get_fi_addr(struct util_av *av, const void *addr);
 
 int ofi_get_addr(uint32_t addr_format, uint64_t flags,
 		 const char *node, const char *service,
@@ -773,14 +775,10 @@ struct util_cmap {
 	struct util_ep		*ep;
 	struct util_av		*av;
 
-	/* cmap handles that correspond to addresses in AV */
-	struct util_cmap_handle **handles_av;
-
-	/* Store all cmap handles (inclusive of handles_av) in an indexer.
-	 * This allows reverse lookup of the handle using the index. */
-	struct indexer		handles_idx;
-
-	struct ofi_key_idx	key_idx;
+	/* Converts fi_addr_t to CMAP AV handle.
+	 * CMAP AV handles are allocated somehow (heap/pool/etc) by user
+	 * (the pointers must be valid as long as they are in the table) */
+	struct util_cmap_handle **av_handle_table;
 
 	struct dlist_entry	peer_list;
 	struct util_cmap_attr	attr;
@@ -825,8 +823,7 @@ static inline struct util_cmap_handle *
 ofi_cmap_acquire_handle(struct util_cmap *cmap, fi_addr_t fi_addr)
 
 {
-	assert(fi_addr <= cmap->av->count);
-	return cmap->handles_av[fi_addr];
+	return cmap->av_handle_table[fi_addr];
 }
 
 /*

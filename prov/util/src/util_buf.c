@@ -46,6 +46,7 @@ static inline void util_buf_set_ftr(union util_buf *buf,
 	struct util_buf_footer *buf_ftr =
 		(struct util_buf_footer *) ((char *) buf + pool->attr.size);
 	*buf_ftr = *ftr;
+	assert(buf_ftr->region);
 }
 
 int util_buf_grow(struct util_buf_pool *pool)
