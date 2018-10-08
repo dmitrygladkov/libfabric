@@ -305,8 +305,12 @@ struct util_buf_footer {
 	size_t index;
 };
 
-union util_buf {
+struct util_buf_header {
 	struct slist_entry entry;
+};
+
+union util_buf {
+	struct util_buf_header header;
 	uint8_t data[0];
 };
 
@@ -357,7 +361,7 @@ static inline void *util_buf_get(struct util_buf_pool *pool)
 static inline void util_buf_release(struct util_buf_pool *pool, void *buf)
 {
 	union util_buf *util_buf = buf;
-	slist_insert_head(&util_buf->entry, &pool->buf_list);
+	slist_insert_head(&util_buf->header.entry, &pool->buf_list);
 }
 
 static inline size_t util_get_buf_index(struct util_buf_pool *pool, void *buf)

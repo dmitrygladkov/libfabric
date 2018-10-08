@@ -126,10 +126,10 @@ int util_buf_grow(struct util_buf_pool *pool)
 			(buf_region->mem_region + i * pool->entry_sz);
 		if (pool->attr.init) {
 #if ENABLE_DEBUG
-			util_buf->entry.next = (void *)OFI_MAGIC_64;
+			util_buf->header.entry.next = (void *)OFI_MAGIC_64;
 #endif
 			pool->attr.init(pool->attr.ctx, util_buf);
-			assert(util_buf->entry.next == (void *)OFI_MAGIC_64);
+			assert(util_buf->header.entry.next == (void *)OFI_MAGIC_64);
 		}
 
 		if (util_buf_use_ftr(pool)) {
@@ -137,7 +137,7 @@ int util_buf_grow(struct util_buf_pool *pool)
 			util_buf_set_ftr(util_buf, &buf_ftr, pool);
 		}
 
-		slist_insert_tail(&util_buf->entry, &pool->buf_list);
+		slist_insert_tail(&util_buf->header.entry, &pool->buf_list);
 	}
 
 	slist_insert_tail(&buf_region->entry, &pool->region_list);
@@ -232,7 +232,7 @@ void util_buf_release(struct util_buf_pool *pool, void *buf)
 	buf_ftr = (struct util_buf_footer *) ((char *) buf + pool->attr.size);
 	assert(buf_ftr->region->num_used);
 	buf_ftr->region->num_used--;
-	slist_insert_head(&util_buf->entry, &pool->buf_list);
+	slist_insert_head(&util_buf->header.entry, &pool->buf_list);
 }
 
 size_t util_get_buf_index(struct util_buf_pool *pool, void *buf)
