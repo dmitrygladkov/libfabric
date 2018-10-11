@@ -112,8 +112,9 @@ static int rxm_domain_close(fid_t fid)
 	rxm_domain = container_of(fid, struct rxm_domain, util_domain.domain_fid.fid);
 
 	ret = fi_close(&rxm_domain->msg_domain->fid);
-	if (ret)
-		return ret;
+	if (ret) {
+		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to close msg Domain\n");
+	}
 
 	ret = ofi_domain_close(&rxm_domain->util_domain);
 	if (ret)

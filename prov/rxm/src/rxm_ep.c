@@ -2003,7 +2003,9 @@ static int rxm_ep_close(struct fid *fid)
 	ofi_endpoint_close(&rxm_ep->util_ep);
 	fi_freeinfo(rxm_ep->rxm_info);
 	free(rxm_ep);
-	return retv;
+
+	(void) retv;
+	return 0;
 }
 
 static int rxm_ep_msg_get_wait_cq_fd(struct rxm_ep *rxm_ep,

@@ -54,8 +54,9 @@ static int rxm_fabric_close(fid_t fid)
 	rxm_fabric = container_of(fid, struct rxm_fabric, util_fabric.fabric_fid.fid);
 
 	ret = fi_close(&rxm_fabric->msg_fabric->fid);
-	if (ret)
-		return ret;
+	if (ret) {
+		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to close msg Fabric\n");
+	}
 
 	ret = ofi_fabric_close(&rxm_fabric->util_fabric);
 	if (ret)
