@@ -95,6 +95,13 @@ static inline void dlist_remove_init(struct dlist_entry *item)
 	dlist_init(item);
 }
 
+static inline struct dlist_entry *dlist_remove_head(struct dlist_entry *head)
+{
+	struct dlist_entry *entry = head->next;
+	dlist_remove(head->next);
+	return entry;
+}
+
 #define dlist_pop_front(head, type, container, member)			\
 	do {								\
 		container = container_of((head)->next, type, member);	\

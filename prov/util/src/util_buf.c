@@ -48,6 +48,46 @@ static inline void util_buf_set_ftr(union util_buf *buf,
 	*buf_ftr = *ftr;
 }
 
+static void util_buf_region_free_mem(struct util_buf_pool *pool,
+				     struct util_buf_region *buf_region)
+{
+	int ret;
+
+	if (pool->attr.free_hndlr)
+		pool->attr.free_hndlr(pool->attr.ctx, buf_region->context);
+	if (pool->attr.is_mmap_region) {
+		ret = ofi_free_hugepage_buf(buf_region->mem_region,
+					    buf_region->size);
+		if (ret) {
+			FI_DBG(&core_prov, FI_LOG_CORE,
+			       "Huge page free failed: %s\n",
+			       fi_strerror(-ret));
+			assert(0);
+		}
+	} else {
+		ofi_freealign(buf_region->mem_region);
+	}
+}
+
+void util_buf_region_cleanup(struct util_buf_pool *pool,
+			     struct util_buf_region *buf_region)
+{
+	size_t i;
+	union util_buf *util_buf;
+
+	dlist_remove(&buf_region->entry);
+	dlist_insert_tail(&buf_region->entry, &pool->free_region_list);
+
+	for (i = 0; i < pool->attr.chunk_cnt; i++) {
+		util_buf = (union util_buf *)
+			(buf_region->mem_region + i * pool->entry_sz);
+		dlist_remove(&util_buf->entry);
+	}
+	util_buf_region_free_mem(pool, buf_region);
+
+	pool->num_allocated -= pool->attr.chunk_cnt;
+}
+
 int util_buf_grow(struct util_buf_pool *pool)
 {
 	int ret;
@@ -61,9 +101,29 @@ int util_buf_grow(struct util_buf_pool *pool)
 		return -1;
 	}
 
-	buf_region = calloc(1, sizeof(*buf_region));
-	if (!buf_region)
-		return -1;
+	if (dlist_empty(&pool->free_region_list)) {
+		buf_region = calloc(1, sizeof(*buf_region));
+		if (!buf_region)
+			return -1;
+		if (util_buf_use_ftr(pool)) {
+			if (!(pool->regions_cnt % UTIL_BUF_POOL_REGION_CHUNK_CNT)) {
+				struct util_buf_region **new_table =
+					realloc(pool->regions_table,
+						(pool->regions_cnt +
+						 UTIL_BUF_POOL_REGION_CHUNK_CNT) *
+						sizeof(*pool->regions_table));
+				if (!new_table)
+					goto err3;
+				pool->regions_table = new_table;
+			}
+			buf_region->index = pool->regions_cnt;
+			pool->regions_table[buf_region->index] = buf_region;
+			pool->regions_cnt++;
+		}
+	} else {
+		buf_region = container_of(dlist_remove_head(&pool->free_region_list),
+					  struct util_buf_region, entry);
+	}
 
 	if (pool->attr.is_mmap_region) {
 		hp_size = ofi_get_hugepage_size();
@@ -105,21 +165,6 @@ int util_buf_grow(struct util_buf_pool *pool)
 			goto err2;
 	}
 
-	if (util_buf_use_ftr(pool)) {
-		if (!(pool->regions_cnt % UTIL_BUF_POOL_REGION_CHUNK_CNT)) {
-			struct util_buf_region **new_table =
-				realloc(pool->regions_table,
-					(pool->regions_cnt +
-					 UTIL_BUF_POOL_REGION_CHUNK_CNT) *
-					sizeof(*pool->regions_table));
-			if (!new_table)
-				goto err3;
-			pool->regions_table = new_table;
-		}
-		pool->regions_table[pool->regions_cnt] = buf_region;
-		pool->regions_cnt++;
-	}
-
 	buf_ftr.region = buf_region;
 
 	for (i = 0; i < pool->attr.chunk_cnt; i++) {
@@ -134,14 +179,14 @@ int util_buf_grow(struct util_buf_pool *pool)
 		}
 
 		if (util_buf_use_ftr(pool)) {
-			buf_ftr.index = pool->num_allocated + i;
+			buf_ftr.index = buf_region->index + i;
 			util_buf_set_ftr(util_buf, &buf_ftr, pool);
 		}
 
-		slist_insert_tail(&util_buf->entry, &pool->buf_list);
+		dlist_insert_tail(&util_buf->entry, &pool->buf_list);
 	}
 
-	slist_insert_tail(&buf_region->entry, &pool->region_list);
+	dlist_insert_tail(&buf_region->entry, &pool->region_list);
 	pool->num_allocated += pool->attr.chunk_cnt;
 	return 0;
 err3:
@@ -166,8 +211,9 @@ int util_buf_pool_create_attr(struct util_buf_attr *attr,
 
 	(*buf_pool)->attr = *attr;
 
-	entry_sz = util_buf_use_ftr(*buf_pool) ?
-		(attr->size + sizeof(struct util_buf_footer)) : attr->size;
+	entry_sz = attr->size + (util_buf_use_ftr(*buf_pool) ?
+				 sizeof(struct util_buf_footer) :
+				 sizeof_field(struct util_buf_footer, region));
 	(*buf_pool)->entry_sz = fi_get_aligned_sz(entry_sz, attr->alignment);
 
 	hp_size = ofi_get_hugepage_size();
@@ -177,8 +223,9 @@ int util_buf_pool_create_attr(struct util_buf_attr *attr,
 	else
 		(*buf_pool)->attr.is_mmap_region = 1;
 
-	slist_init(&(*buf_pool)->buf_list);
-	slist_init(&(*buf_pool)->region_list);
+	dlist_init(&(*buf_pool)->buf_list);
+	dlist_init(&(*buf_pool)->region_list);
+	dlist_init(&(*buf_pool)->free_region_list);
 
 	return FI_SUCCESS;
 }
@@ -211,10 +258,10 @@ int util_buf_pool_create_ex(struct util_buf_pool **buf_pool,
 #if ENABLE_DEBUG
 void *util_buf_get(struct util_buf_pool *pool)
 {
-	struct slist_entry *entry;
+	struct dlist_entry *entry;
 	struct util_buf_footer *buf_ftr;
 
-	entry = slist_remove_head(&pool->buf_list);
+	entry = dlist_remove_head(&pool->buf_list);
 	buf_ftr = (struct util_buf_footer *) ((char *) entry + pool->attr.size);
 	buf_ftr->region->num_used++;
 	assert(buf_ftr->region->num_used);
@@ -229,7 +276,11 @@ void util_buf_release(struct util_buf_pool *pool, void *buf)
 	buf_ftr = (struct util_buf_footer *) ((char *) buf + pool->attr.size);
 	assert(buf_ftr->region->num_used);
 	buf_ftr->region->num_used--;
-	slist_insert_head(&util_buf->entry, &pool->buf_list);
+	dlist_insert_head(&util_buf->entry, &pool->buf_list);
+	if (!buf_ftr->region->num_used &&
+	    (pool->num_allocated > pool->attr.chunk_cnt)) {
+		util_buf_region_cleanup(pool, buf_ftr->region);
+	}
 }
 
 size_t util_get_buf_index(struct util_buf_pool *pool, void *buf)
@@ -257,32 +308,17 @@ void *util_buf_get_by_index(struct util_buf_pool *pool, size_t index)
 
 void util_buf_pool_destroy(struct util_buf_pool *pool)
 {
-	struct slist_entry *entry;
+	struct dlist_entry *entry;
 	struct util_buf_region *buf_region;
-	int ret;
 
-	while (!slist_empty(&pool->region_list)) {
-		entry = slist_remove_head(&pool->region_list);
+	while (!dlist_empty(&pool->region_list)) {
+		entry = dlist_remove_head(&pool->region_list);
 		buf_region = container_of(entry, struct util_buf_region, entry);
 #if ENABLE_DEBUG
 		if (pool->attr.track_used)
 			assert(buf_region->num_used == 0);
 #endif
-		if (pool->attr.free_hndlr)
-			pool->attr.free_hndlr(pool->attr.ctx, buf_region->context);
-		if (pool->attr.is_mmap_region) {
-			ret = ofi_free_hugepage_buf(buf_region->mem_region,
-						    buf_region->size);
-			if (ret) {
-				FI_DBG(&core_prov, FI_LOG_CORE,
-				       "Huge page free failed: %s\n",
-				       fi_strerror(-ret));
-				assert(0);
-			}
-		} else {
-			ofi_freealign(buf_region->mem_region);
-		}
-
+		util_buf_region_free_mem(pool, buf_region);
 		free(buf_region);
 	}
 	free(pool->regions_table);
