@@ -283,30 +283,31 @@ struct util_buf_attr {
 struct util_buf_pool {
 	size_t 			entry_sz;
 	size_t 			num_allocated;
-	struct slist		buf_list;
-	struct slist		region_list;
+	struct dlist_entry	buf_list;
+	struct dlist_entry	region_list;
+	struct dlist_entry	free_region_list;
 	struct util_buf_region	**regions_table;
 	size_t			regions_cnt;
 	struct util_buf_attr	attr;
 };
 
 struct util_buf_region {
-	struct slist_entry entry;
+	struct dlist_entry entry;
 	char *mem_region;
 	size_t size;
 	void *context;
-#if ENABLE_DEBUG
+	size_t index;
 	size_t num_used;
-#endif
 };
 
 struct util_buf_footer {
+	/* Must stay at top */
 	struct util_buf_region *region;
 	size_t index;
 };
 
 union util_buf {
-	struct slist_entry entry;
+	struct dlist_entry entry;
 	uint8_t data[0];
 };
 
@@ -333,10 +334,12 @@ static inline int util_buf_pool_create(struct util_buf_pool **pool,
 
 static inline int util_buf_avail(struct util_buf_pool *pool)
 {
-	return !slist_empty(&pool->buf_list);
+	return !dlist_empty(&pool->buf_list);
 }
 
 int util_buf_grow(struct util_buf_pool *pool);
+void util_buf_region_cleanup(struct util_buf_pool *pool,
+			     struct util_buf_region *buf_region);
 
 #if ENABLE_DEBUG
 
@@ -349,12 +352,21 @@ void *util_buf_get_by_index(struct util_buf_pool *pool, size_t index);
 
 static inline void *util_buf_get(struct util_buf_pool *pool)
 {
-	return slist_remove_head(&pool->buf_list);
+	union util_buf *buf = (union util_buf *)dlist_remove_head(&pool->buf_list);
+	((struct util_buf_region *)((char *) buf + pool->attr.size))->num_used++;
+	return buf;
 }
 
 static inline void util_buf_release(struct util_buf_pool *pool, void *buf)
 {
-	slist_insert_head(&((union util_buf * )buf)->entry, &pool->buf_list);
+	struct util_buf_region *buf_region =
+		(struct util_buf_region *)((char *) buf + pool->attr.size);
+	dlist_insert_head(&((union util_buf * )buf)->entry, &pool->buf_list);
+	buf_region->num_used--;
+	if (!buf_region->num_used &&
+	    (pool->num_allocated > pool->attr.chunk_cnt)) {
+		util_buf_region_cleanup(pool, buf_region);
+	}
 }
 
 static inline size_t util_get_buf_index(struct util_buf_pool *pool, void *buf)
