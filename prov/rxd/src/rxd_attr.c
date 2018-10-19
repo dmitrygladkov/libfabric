@@ -70,6 +70,10 @@ struct fi_domain_attr rxd_domain_attr = {
 	.av_type = FI_AV_UNSPEC,
 	.cq_data_size = sizeof_field(struct rxd_data_hdr, cq_data),
 	.mr_key_size = sizeof(uint64_t),
+	/* Advertise support for FI_MR_BASIC so that ofi_check_info call
+	 * doesn't fail at RxD level. If an app requires FI_MR_BASIC, it
+	 * would be passed down to core provider. */
+	.mr_mode = FI_MR_BASIC | FI_MR_SCALABLE,
 	.cq_cnt = 128,
 	.ep_cnt = 128,
 	.tx_ctx_cnt = 1,
