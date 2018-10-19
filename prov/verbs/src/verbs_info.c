@@ -1401,8 +1401,11 @@ static int fi_ibv_get_match_infos(uint32_t version, const char *node,
 
 	// TODO check for AF_IB addr
 	ret = fi_ibv_get_matching_info(version, hints, info, *raw_info,
-				       ofi_is_wildcard_listen_addr(node, service,
-								   flags, hints));
+				       (hints && (hints->addr_format == FI_SOCKADDR ||
+						  hints->addr_format == FI_SOCKADDR_IN ||
+						  hints->addr_format == FI_SOCKADDR_IN6)) ?
+				        ofi_is_wildcard_listen_addr(node, service,
+								    flags, hints) : 0);
 	if (ret)
 		return ret;
 
