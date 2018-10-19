@@ -1092,8 +1092,8 @@ int rxd_endpoint(struct fid_domain *domain, struct fi_info *info,
 	if (ret)
 		goto err4;
 
-	rxd_ep->rx_size = info->rx_attr->size;
-	rxd_ep->tx_size = info->tx_attr->size;
+	rxd_ep->rx_size = dg_info->rx_attr->size;
+	rxd_ep->tx_size = dg_info->tx_attr->size;
 	rxd_ep->prefix_size = info->ep_attr->msg_prefix_size;
 	ret = rxd_ep_init_res(rxd_ep, info);
 	if (ret)
