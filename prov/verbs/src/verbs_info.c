@@ -425,7 +425,7 @@ static inline int fi_ibv_get_qp_cap(struct ibv_context *ctx,
 	init_attr.cap.max_recv_wr = fi_ibv_gl_data.def_rx_size;
 	init_attr.cap.max_send_sge = fi_ibv_gl_data.def_tx_iov_limit;
 	init_attr.cap.max_recv_sge = fi_ibv_gl_data.def_rx_iov_limit;
-	init_attr.cap.max_inline_data = fi_ibv_find_max_inline(pd, ctx, qp_type);
+	init_attr.cap.max_inline_data = 256;
 	init_attr.qp_type = qp_type;
 
 	qp = ibv_create_qp(pd, &init_attr);
