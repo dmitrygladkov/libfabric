@@ -454,8 +454,6 @@ struct fi_ibv_cm_data_hdr {
 
 int fi_ibv_sockaddr_len(struct sockaddr *addr);
 
-
-int fi_ibv_init_info(const struct fi_info **all_infos);
 int fi_ibv_getinfo(uint32_t version, const char *node, const char *service,
 		   uint64_t flags, const struct fi_info *hints,
 		   struct fi_info **info);

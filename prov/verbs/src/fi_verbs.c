@@ -608,6 +608,37 @@ static int fi_ibv_read_params(void)
 	return FI_SUCCESS;
 }
 
+/*
+ * USNIC plugs into the verbs framework, but is not a usable device.
+ * Manually check for devices and fail gracefully if none are present.
+ * This avoids the lower libraries (libibverbs and librdmacm) from
+ * reporting error messages to stderr.
+ */
+static int fi_ibv_have_device(void)
+{
+	struct ibv_device **devs;
+	struct ibv_context *verbs;
+	int i, ret = 0;
+
+	devs = ibv_get_device_list(NULL);
+	if (!devs)
+		return 0;
+
+	for (i = 0; devs[i]; i++) {
+		verbs = ibv_open_device(devs[i]);
+		if (verbs) {
+			ibv_close_device(verbs);
+			ret = 1;
+			break;
+		}
+	}
+
+	
+
+	ibv_free_device_list(devs);
+	return ret;
+}
+
 static void fi_ibv_fini(void)
 {
 	fi_freeinfo((void *)fi_ibv_util_prov.info);
@@ -616,7 +647,21 @@ static void fi_ibv_fini(void)
 
 VERBS_INI
 {
-	if (fi_ibv_read_params()|| fi_ibv_init_info(&fi_ibv_util_prov.info))
+	if (!fi_ibv_gl_data.fork_unsafe) {
+		int ret;
+		VERBS_INFO(FI_LOG_CORE, "Enabling IB fork support\n");
+		ret = ibv_fork_init();
+		if (ret) {
+			VERBS_WARN(FI_LOG_CORE,
+				   "Enabling IB fork support failed: %s (%d)\n",
+				   strerror(ret), ret);
+			return NULL;
+		}
+	} else {
+		VERBS_INFO(FI_LOG_CORE, "Not enabling IB fork support\n");
+	}
+
+	if (fi_ibv_read_params() || !fi_ibv_have_device())
 		return NULL;
 	return &fi_ibv_prov;
 }

@@ -142,6 +142,9 @@ const struct verbs_ep_domain verbs_dgram_domain = {
 	.caps			= VERBS_DGRAM_CAPS,
 };
 
+static int verbs_dgram_init_done = 1;
+static int verbs_msg_init_done = 0;
+
 int fi_ibv_check_ep_attr(const struct fi_info *hints,
 			 const struct fi_info *info)
 {
@@ -544,35 +547,6 @@ static int fi_ibv_get_device_attrs(struct ibv_context *ctx,
 	info->ep_attr->max_order_waw_size	= max_sup_size;
 
 	return 0;
-}
-
-/*
- * USNIC plugs into the verbs framework, but is not a usable device.
- * Manually check for devices and fail gracefully if none are present.
- * This avoids the lower libraries (libibverbs and librdmacm) from
- * reporting error messages to stderr.
- */
-static int fi_ibv_have_device(void)
-{
-	struct ibv_device **devs;
-	struct ibv_context *verbs;
-	int i, ret = 0;
-
-	devs = ibv_get_device_list(NULL);
-	if (!devs)
-		return 0;
-
-	for (i = 0; devs[i]; i++) {
-		verbs = ibv_open_device(devs[i]);
-		if (verbs) {
-			ibv_close_device(verbs);
-			ret = 1;
-			break;
-		}
-	}
-
-	ibv_free_device_list(devs);
-	return ret;
 }
 
 static int fi_ibv_alloc_info(struct ibv_context *ctx, struct fi_info **info,
@@ -1016,64 +990,67 @@ rai_to_fi:
 				     NULL, NULL);
 }
 
-int fi_ibv_init_info(const struct fi_info **all_infos)
+static struct fi_info *
+fi_ibv_alloc_info_for_devices(enum fi_ep_type ep_type, int *dgram_init, int *msg_init)
 {
+	const struct verbs_ep_domain *verbs_domains[2] = { NULL, NULL };
+	uint8_t dom_iter;
 	struct ibv_context **ctx_list;
-	struct fi_info *fi = NULL, *tail = NULL;
 	int ret = 0, i, num_devices;
+	struct fi_info *new_infos = NULL, *fi = NULL, *tail = NULL;
 
-	*all_infos = NULL;
-
-	if (!fi_ibv_gl_data.fork_unsafe) {
-		VERBS_INFO(FI_LOG_CORE, "Enabling IB fork support\n");
-		ret = ibv_fork_init();
-		if (ret) {
-			VERBS_WARN(FI_LOG_CORE,
-				   "Enabling IB fork support failed: %s (%d)\n",
-				   strerror(ret), ret);
-			goto done;
+	switch (ep_type) {
+	case FI_EP_UNSPEC:
+		if (!*dgram_init) {
+			verbs_domains[0] = &verbs_dgram_domain;
+			*dgram_init = 1;
 		}
-	} else {
-		VERBS_INFO(FI_LOG_CORE, "Not enabling IB fork support\n");
-	}
-
-	if (!fi_ibv_have_device()) {
-		VERBS_INFO(FI_LOG_FABRIC, "No RDMA devices found\n");
-		ret = -FI_ENODATA;
-		goto done;
+		if (!*msg_init) {
+			verbs_domains[1] = &verbs_msg_domain;
+			*msg_init = 1;
+		}
+		break;
+	case FI_EP_MSG:
+		if (!*msg_init) {
+			verbs_domains[0] = &verbs_msg_domain;
+			*msg_init = 1;
+		}
+		break;
+	case FI_EP_DGRAM:
+		if (!*dgram_init) {
+			verbs_domains[0] = &verbs_dgram_domain;
+			*dgram_init = 1;
+		}
+		break;
+	default:
+		return NULL;
 	}
 
 	ctx_list = rdma_get_devices(&num_devices);
 	if (!num_devices) {
 		VERBS_INFO_ERRNO(FI_LOG_FABRIC, "rdma_get_devices", errno);
-		ret = -errno;
-		goto done;
+		return NULL;
 	}
 
 	for (i = 0; i < num_devices; i++) {
-		ret = fi_ibv_alloc_info(ctx_list[i], &fi, &verbs_msg_domain);
-		if (!ret) {
-			if (!*all_infos)
-				*all_infos = fi;
-			else
-				tail->next = fi;
-			tail = fi;
-
-			ret = fi_ibv_alloc_info(ctx_list[i], &fi,
-						&verbs_dgram_domain);
-			if (!ret) {
-				tail->next = fi;
-				tail = fi;
+		for (dom_iter = 0; dom_iter < 2; dom_iter++) {
+			if (verbs_domains[dom_iter]) {
+				ret = fi_ibv_alloc_info(ctx_list[i], &fi,
+							verbs_domains[dom_iter]);
+				if (!ret) {
+					if (!new_infos)
+						new_infos = fi;
+					else
+						tail->next = fi;
+					tail = fi;
+				}
 			}
 		}
 	}
 
-	/* note we are possibly discarding ENOMEM */
-	ret = *all_infos ? 0 : ret;
-
 	rdma_free_devices(ctx_list);
-done:
-	return ret;
+
+	return new_infos;
 }
 
 static int fi_ibv_set_default_attr(struct fi_info *info, size_t *attr,
@@ -1448,9 +1425,33 @@ int fi_ibv_getinfo(uint32_t version, const char *node, const char *service,
 {
 	int ret;
 	const struct fi_info *cur;
+	struct fi_info *alloc_infos = NULL;
+	enum fi_ep_type ep_type = FI_EP_UNSPEC;
 
-	ret = fi_ibv_get_match_infos(version, node, service,
-				     flags, hints,
+	if (hints && hints->ep_attr) {
+		ep_type = hints->ep_attr->type;
+	}
+
+	if (!verbs_dgram_init_done || !verbs_msg_init_done) {
+		alloc_infos =
+			fi_ibv_alloc_info_for_devices(ep_type, &verbs_dgram_init_done,
+						      &verbs_msg_init_done);
+		if (alloc_infos) {
+			if (!fi_ibv_util_prov.info) {
+				fi_ibv_util_prov.info = alloc_infos;
+			} else {
+				struct fi_info *tail = (struct fi_info *)fi_ibv_util_prov.info;
+
+				while (tail->next != NULL)
+					tail = tail->next;
+
+				tail->next = alloc_infos;
+				fi_ibv_util_prov.info = tail;
+			}
+		}
+	}
+
+	ret = fi_ibv_get_match_infos(version, node, service, flags, hints,
 				     &fi_ibv_util_prov.info, info);
 	if (ret)
 		goto out;
