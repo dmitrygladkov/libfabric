@@ -639,6 +639,13 @@ RXM_EP_DEFINE_PROTO_LIMIT(inject)
 RXM_EP_DEFINE_PROTO_LIMIT(eager)
 RXM_EP_DEFINE_PROTO_LIMIT(sar)
 
+static inline
+size_t rxm_ep_get_genuine_inject_buf_limit(struct rxm_ep *rxm_ep)
+{
+	return (rxm_ep_get_inject_buf_limit(rxm_ep) ?
+		(rxm_ep_get_inject_buf_limit(rxm_ep) - 1) : 0);
+}
+
 struct rxm_conn {
 	/* This should stay at the top */
 	struct rxm_cmap_handle handle;

@@ -830,10 +830,10 @@ static ssize_t rxm_cq_handle_comp(struct rxm_ep *rxm_ep,
 		assert(comp->flags & FI_READ);
 		if (++rx_buf->rndv_rma_index < rx_buf->rndv_hdr->count)
 			return 0;
-		else if (sizeof(rx_buf->pkt) > rxm_ep_get_inject_buf_limit(rxm_ep))
-			return rxm_rndv_send_ack(rx_buf);
-		else
+		else if (sizeof(rx_buf->pkt) < rxm_ep_get_inject_buf_limit(rxm_ep))
 			return rxm_rndv_send_ack_fast(rx_buf);
+		else
+			return rxm_rndv_send_ack(rx_buf);
 	case RXM_RNDV_ACK_SENT:
 		rx_buf = comp->op_context;
 		assert(comp->flags & FI_SEND);

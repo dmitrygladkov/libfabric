@@ -374,7 +374,7 @@ static int rxm_ep_txrx_pool_create(struct rxm_ep *rxm_ep)
 		sizeof(struct rxm_rx_buf),				/* RX */
 		rxm_ep_get_eager_buf_limit(rxm_ep) +
 		sizeof(struct rxm_tx_eager_buf),			/* TX */
-		rxm_ep_get_inject_buf_limit(rxm_ep) +
+		rxm_ep_get_genuine_inject_buf_limit(rxm_ep) +
 		sizeof(struct rxm_tx_base_buf),				/* TX INJECT */
 		sizeof(struct rxm_tx_base_buf),				/* TX ACK */
 		sizeof(struct rxm_rndv_hdr) + rxm_ep->buffered_min +
@@ -866,7 +866,7 @@ rxm_ep_msg_inject_send(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 	       " tag: 0x%" PRIx64 "\n", pkt_size, tx_pkt->hdr.tag);
 
 	assert((tx_pkt->hdr.flags & FI_REMOTE_CQ_DATA) || !tx_pkt->hdr.flags);
-	assert((pkt_size - sizeof(struct rxm_pkt)) <= rxm_ep_get_inject_buf_limit(rxm_ep));
+	assert((pkt_size - sizeof(struct rxm_pkt)) < rxm_ep_get_inject_buf_limit(rxm_ep));
 
 	ssize_t ret = fi_inject(rxm_conn->msg_ep, tx_pkt, pkt_size, 0);
 	if (OFI_LIKELY(!ret)) {
@@ -965,7 +965,7 @@ rxm_ep_rndv_tx_send(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 
 	RXM_LOG_STATE(FI_LOG_EP_DATA, tx_buf->pkt, RXM_TX, RXM_RNDV_TX);
 
-	if ((pkt_size - sizeof(struct rxm_pkt)) <= rxm_ep_get_inject_buf_limit(rxm_ep)) {
+	if ((pkt_size - sizeof(struct rxm_pkt)) < rxm_ep_get_inject_buf_limit(rxm_ep)) {
 		RXM_LOG_STATE(FI_LOG_CQ, tx_buf->pkt, RXM_RNDV_TX, RXM_RNDV_ACK_WAIT);
 		tx_buf->hdr.state = RXM_RNDV_ACK_WAIT;
 
@@ -1177,7 +1177,7 @@ rxm_ep_inject_data_send_fast(struct rxm_ep *rxm_ep, const void *buf, size_t len,
 	struct rxm_conn *rxm_conn;
 	ssize_t ret;
 
-	assert(len <= rxm_ep_get_inject_buf_limit(rxm_ep));
+	assert(len < rxm_ep_get_inject_buf_limit(rxm_ep));
 
 	ret = rxm_ep_send_prerequisites(rxm_ep, dest_addr, &rxm_conn);
 	if (OFI_UNLIKELY(ret))
@@ -1203,7 +1203,7 @@ rxm_ep_inject_send_fast(struct rxm_ep *rxm_ep, const void *buf, size_t len,
 	struct rxm_conn *rxm_conn;
 	ssize_t ret;
 
-	assert(len <= rxm_ep_get_inject_buf_limit(rxm_ep));
+	assert(len < rxm_ep_get_inject_buf_limit(rxm_ep));
 
 	ret = rxm_ep_send_prerequisites(rxm_ep, dest_addr, &rxm_conn);
 	if (OFI_UNLIKELY(ret))
@@ -1228,7 +1228,7 @@ rxm_ep_inject_send(struct rxm_ep *rxm_ep, const void *buf, size_t len,
 	struct rxm_tx_base_buf *tx_buf;
 	ssize_t ret;
 
-	assert(len <= rxm_ep_get_inject_buf_limit(rxm_ep));
+	assert(len < rxm_ep_get_inject_buf_limit(rxm_ep));
 
 	ret = rxm_ep_send_prerequisites(rxm_ep, dest_addr, &rxm_conn);
 	if (OFI_UNLIKELY(ret))
@@ -1328,7 +1328,7 @@ rxm_ep_send_common(struct rxm_ep *rxm_ep, const struct iovec *iov, void **desc,
 	if (OFI_UNLIKELY(ret))
 		return ret;
 
-	if (data_len <= rxm_ep_get_inject_buf_limit(rxm_ep)) {
+	if (data_len < rxm_ep_get_inject_buf_limit(rxm_ep)) {
 		return rxm_ep_inject_send_common(rxm_ep, iov, count, rxm_conn,
 						 context, data, flags, tag, op,
 						 data_len, inject_pkt);
@@ -2187,7 +2187,7 @@ static void rxm_ep_eager_init(struct rxm_ep *rxm_ep)
 	size_t min_eager_val = sizeof(struct rxm_rndv_hdr) + rxm_ep->buffered_min;
 
 	if (!fi_param_get_size_t(&rxm_prov, "eager_limit", &param)) {
-		if ((param < rxm_ep_get_inject_buf_limit(rxm_ep)) ||
+		if ((param <= rxm_ep_get_genuine_inject_buf_limit(rxm_ep)) ||
 		    (param < min_eager_val)) {
 			FI_WARN(&rxm_prov, FI_LOG_CORE,
 				"Requested Eager limit (%zd) less than inject size (%zd) or "
@@ -2195,11 +2195,11 @@ static void rxm_ep_eager_init(struct rxm_ep *rxm_ep)
 				"protocol will be used for messages of sizes less than %zd. "
 				"Messages of size <= (>) inject size would be transmitted via "
 				"MSG fi_inject (SAR/rendezvous protocol) \n",
-				param, rxm_ep_get_inject_buf_limit(rxm_ep), min_eager_val,
-				MAX(rxm_ep_get_inject_buf_limit(rxm_ep), min_eager_val));
+				param, rxm_ep_get_genuine_inject_buf_limit(rxm_ep), min_eager_val,
+				MAX(rxm_ep_get_genuine_inject_buf_limit(rxm_ep), min_eager_val));
 
 			/* The minimum required Eager limit is adjusted by greatest protocol header */
-			param = MAX(rxm_ep_get_inject_buf_limit(rxm_ep), min_eager_val);
+			param = MAX(rxm_ep_get_genuine_inject_buf_limit(rxm_ep), min_eager_val);
 		}
 		rxm_ep_set_eager_buf_limit(rxm_ep, param);
 	} else {
@@ -2216,15 +2216,15 @@ static void rxm_ep_sar_init(struct rxm_ep *rxm_ep)
 	assert(rxm_ep_get_eager_buf_limit(rxm_ep) > 0);
 
 	if (!fi_param_get_size_t(&rxm_prov, "sar_limit", &param)) {
-		if (param < rxm_ep_get_eager_buf_limit(rxm_ep)) {
+		if (param <= rxm_ep_get_eager_buf_limit(rxm_ep)) {
 			FI_WARN(&rxm_prov, FI_LOG_CORE,
-				"Requested SAR limit (%zd) less than Eager limit (%zd), hence "
-				"SAR protocol won't be used. Messages of size <= (>) Eager "
+				"Requested SAR limit (%zd) less than (or equal) Eager limit (%zd), "
+				"hence SAR protocol won't be used. Messages of size <= (>) Eager "
 				"size would would be transmitted via eager (rendezvous) "
 				"protocol.\n", param, rxm_ep_get_eager_buf_limit(rxm_ep));
-		} else {
-			rxm_ep_set_sar_buf_limit(rxm_ep, param);
+			param = rxm_ep_get_eager_buf_limit(rxm_ep);
 		}
+		rxm_ep_set_sar_buf_limit(rxm_ep, param);
 	} else {
 		size_t sar_limit = rxm_ep->msg_info->tx_attr->size *
 				   rxm_ep_get_eager_buf_limit(rxm_ep);
@@ -2248,8 +2248,22 @@ static void rxm_ep_settings_init(struct rxm_ep *rxm_ep)
 	rxm_ep->msg_mr_local = ofi_mr_local(rxm_ep->msg_info);
 	rxm_ep->rxm_mr_local = ofi_mr_local(rxm_ep->rxm_info);
 
-	rxm_ep_set_inject_buf_limit(rxm_ep, rxm_ep->rxm_info->tx_attr->inject_size);
-	assert(rxm_ep_get_inject_buf_limit(rxm_ep) <= rxm_ep->msg_info->tx_attr->inject_size);
+	assert(rxm_ep->rxm_info->tx_attr->inject_size != SIZE_MAX);
+	rxm_ep_set_inject_buf_limit(rxm_ep, (rxm_ep->rxm_info->tx_attr->inject_size ?
+					     (rxm_ep->rxm_info->tx_attr->inject_size + 1) : 0));
+	assert((rxm_ep_get_inject_buf_limit(rxm_ep) <= rxm_ep->msg_info->tx_attr->inject_size) &&
+	       /* This verifies that the following condition is met:
+		* if (`inject_size` of the MSG provider == RxM header size)
+		*        RxM inject size = 0
+		* else
+		*        RxM inject size = (`inject_size` of the MSG provider -
+		*                           RxM header size) + 1
+		*
+		* This is needed to compare user's buffer length with RxM inject limit
+		* using "<" instead of "<=" to ensure that RxM doesn't use `fi_inject()`
+		* in case of (`inject_size` of the MSG provider == 0).
+		*/
+	       (rxm_ep_get_inject_buf_limit(rxm_ep) != 1));
 
 	if (rxm_ep->msg_info->tx_attr->inject_size >
 	    (sizeof(struct rxm_pkt) + sizeof(struct rxm_rndv_hdr)))
@@ -2274,7 +2288,7 @@ static void rxm_ep_settings_init(struct rxm_ep *rxm_ep)
 				      "SAR - %"PRIu64"\n",
 		rxm_ep->msg_mr_local, rxm_ep->rxm_mr_local,
 		rxm_ep->comp_per_progress,
-		rxm_ep_get_inject_buf_limit(rxm_ep),
+		rxm_ep_get_genuine_inject_buf_limit(rxm_ep),
 		rxm_ep_get_eager_buf_limit(rxm_ep),
 		rxm_ep_get_sar_buf_limit(rxm_ep));
 }
@@ -2331,7 +2345,7 @@ static int
 rxm_ep_inject_pkt_alloc(struct rxm_ep *rxm_ep, struct rxm_pkt **inject_pkt,
 			uint8_t op)
 {
-	*inject_pkt = calloc(1, rxm_ep_get_inject_buf_limit(rxm_ep) +
+	*inject_pkt = calloc(1, rxm_ep_get_genuine_inject_buf_limit(rxm_ep) +
 				sizeof(struct rxm_pkt));
 	if (!(*inject_pkt))
 		return -FI_ENOMEM;
