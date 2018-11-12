@@ -583,6 +583,19 @@ struct rxm_msg_eq_entry {
 #define RXM_CM_ENTRY_SZ (sizeof(struct fi_eq_cm_entry) + \
 			 sizeof(struct rxm_cm_data))
 
+#define RXM_EP_DEFINE_PROTO_LIMIT(proto)				\
+static inline								\
+size_t rxm_ep_get_ ## proto ## _buf_limit(struct rxm_ep *rxm_ep)	\
+{									\
+	return rxm_ep->proto ## _limit;					\
+}									\
+static inline								\
+void rxm_ep_set_ ## proto ## _buf_limit(struct rxm_ep *rxm_ep,		\
+					size_t limit)			\
+{									\
+	rxm_ep->proto ## _limit = limit;				\
+}
+
 struct rxm_ep {
 	struct util_ep 		util_ep;
 	struct fi_info 		*rxm_info;
@@ -596,16 +609,15 @@ struct rxm_ep {
 	int			msg_cq_fd;
 	struct fid_ep 		*srx_ctx;
 	size_t 			comp_per_progress;
-	size_t 			eager_pkt_size;
 	int			msg_mr_local;
 	int			rxm_mr_local;
 	size_t			min_multi_recv_size;
 	size_t			buffered_min;
 	size_t			buffered_limit;
 
-	struct {
-		size_t		limit;
-	} sar;
+	size_t			inject_limit;
+	size_t			eager_limit;
+	size_t			sar_limit;
 
 	/* This is used only in non-FI_THREAD_SAFE case */
 	struct rxm_pkt		*inject_tx_pkt;
@@ -622,6 +634,10 @@ struct rxm_ep {
 	ofi_fastlock_acquire_t	res_fastlock_acquire;
 	ofi_fastlock_release_t	res_fastlock_release;
 };
+
+RXM_EP_DEFINE_PROTO_LIMIT(inject)
+RXM_EP_DEFINE_PROTO_LIMIT(eager)
+RXM_EP_DEFINE_PROTO_LIMIT(sar)
 
 struct rxm_conn {
 	/* This should stay at the top */

@@ -830,7 +830,7 @@ static ssize_t rxm_cq_handle_comp(struct rxm_ep *rxm_ep,
 		assert(comp->flags & FI_READ);
 		if (++rx_buf->rndv_rma_index < rx_buf->rndv_hdr->count)
 			return 0;
-		else if (sizeof(rx_buf->pkt) > rxm_ep->msg_info->tx_attr->inject_size)
+		else if (sizeof(rx_buf->pkt) > rxm_ep_get_inject_buf_limit(rxm_ep))
 			return rxm_rndv_send_ack(rx_buf);
 		else
 			return rxm_rndv_send_ack_fast(rx_buf);
@@ -956,7 +956,9 @@ static inline int rxm_ep_repost_buf(struct rxm_rx_buf *rx_buf)
 		rx_buf->conn = NULL;
 	rx_buf->hdr.state = RXM_RX;
 
-	if (fi_recv(rx_buf->msg_ep, &rx_buf->pkt, rx_buf->ep->eager_pkt_size,
+	if (fi_recv(rx_buf->msg_ep, &rx_buf->pkt,
+		    rxm_ep_get_eager_buf_limit(rx_buf->ep) +
+		    sizeof(struct rxm_pkt),
 		    rx_buf->hdr.desc, FI_ADDR_UNSPEC, rx_buf)) {
 		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to repost buf\n");
 		return -FI_EAVAIL;
