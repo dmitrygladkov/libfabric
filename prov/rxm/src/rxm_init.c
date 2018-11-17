@@ -130,7 +130,9 @@ int rxm_info_to_rxm(uint32_t version, const struct fi_info *core_info,
 	info->tx_attr->mode		= info->mode;
 	info->tx_attr->msg_order 	= core_info->tx_attr->msg_order;
 	info->tx_attr->comp_order 	= rxm_info.tx_attr->comp_order;
-	info->tx_attr->inject_size	= rxm_info.tx_attr->inject_size;
+	info->tx_attr->inject_size	= (MAX(core_info->tx_attr->inject_size,
+					       sizeof(struct rxm_pkt)) -
+					   sizeof(struct rxm_pkt));
 	info->tx_attr->size 		= rxm_info.tx_attr->size;
 	info->tx_attr->iov_limit 	= MIN(rxm_info.tx_attr->iov_limit,
 					      core_info->tx_attr->iov_limit);
@@ -157,26 +159,6 @@ int rxm_info_to_rxm(uint32_t version, const struct fi_info *core_info,
 					      rxm_info.domain_attr->cq_data_size);
 	info->domain_attr->mr_key_size = core_info->domain_attr->mr_key_size;
 
-	return 0;
-}
-
-static int rxm_init_info(void)
-{
-	int param;
-
-	if (!fi_param_get_int(&rxm_prov, "buffer_size", &param)) {
-		if (param > sizeof(struct rxm_pkt)) {
-			rxm_info.tx_attr->inject_size = param;
-		} else {
-			FI_WARN(&rxm_prov, FI_LOG_CORE,
-				"Requested buffer size too small\n");
-			return -FI_EINVAL;
-		}
-	} else {
-		rxm_info.tx_attr->inject_size = RXM_BUF_SIZE;
-	}
-	rxm_info.tx_attr->inject_size -= sizeof(struct rxm_pkt);
-	rxm_util_prov.info = &rxm_info;
 	return 0;
 }
 
@@ -284,7 +266,7 @@ struct fi_provider rxm_prov = {
 
 RXM_INI
 {
-	fi_param_define(&rxm_prov, "buffer_size", FI_PARAM_INT,
+	fi_param_define(&rxm_prov, "buffer_size", FI_PARAM_SIZE_T,
 			"Defines the transmit buffer size / inject size. Messages"
 			" of size less than this would be transmitted via an "
 			"eager protocol and those above would be transmitted "
@@ -332,10 +314,7 @@ RXM_INI
 	fi_param_get_size_t(&rxm_prov, "msg_rx_size", &rxm_msg_rx_size);
 	fi_param_get_size_t(NULL, "universe_size", &rxm_def_univ_size);
 
-	if (rxm_init_info()) {
-		FI_WARN(&rxm_prov, FI_LOG_CORE, "Unable to initialize rxm_info\n");
-		return NULL;
-	}
+	rxm_util_prov.info = &rxm_info;
 
 	return &rxm_prov;
 }

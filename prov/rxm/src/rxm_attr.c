@@ -50,6 +50,7 @@ struct fi_tx_attr rxm_tx_attr = {
 	.size = 1024,
 	.iov_limit = RXM_IOV_LIMIT,
 	.rma_iov_limit = RXM_IOV_LIMIT,
+	.inject_size = SIZE_MAX,
 };
 
 struct fi_rx_attr rxm_rx_attr = {
