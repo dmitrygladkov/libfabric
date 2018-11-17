@@ -351,9 +351,11 @@ static int rxm_recv_queue_init(struct rxm_ep *rxm_ep,  struct rxm_recv_queue *re
 
 static void rxm_recv_queue_close(struct rxm_recv_queue *recv_queue)
 {
-	if (recv_queue->fs)
+	/* It indicates that the recv_queue were allocated */
+	if (recv_queue->fs) {
 		rxm_recv_fs_free(recv_queue->fs);
-	fastlock_destroy(&recv_queue->lock);
+		fastlock_destroy(&recv_queue->lock);
+	}
 	// TODO cleanup recv_list and unexp msg list
 }
 
@@ -448,6 +450,8 @@ static void rxm_ep_rx_queue_close(struct rxm_ep *rxm_ep)
 	rxm_recv_queue_close(&rxm_ep->recv_queue);
 }
 
+/* It is safe to call this function, even if `rxm_ep_txrx_res_open`
+ * has not yet been called */
 static void rxm_ep_txrx_res_close(struct rxm_ep *rxm_ep)
 {
 	rxm_ep_rx_queue_close(rxm_ep);
@@ -2038,92 +2042,6 @@ err:
 	return ret;
 }
 
-static int rxm_ep_ctrl(struct fid *fid, int command, void *arg)
-{
-	struct rxm_ep *rxm_ep;
-	int ret;
-
-	rxm_ep = container_of(fid, struct rxm_ep, util_ep.ep_fid.fid);
-
-	switch (command) {
-	case FI_ENABLE:
-		if (!rxm_ep->util_ep.rx_cq || !rxm_ep->util_ep.tx_cq)
-			return -FI_ENOCQ;
-		if (!rxm_ep->util_ep.av || !rxm_ep->cmap)
-			return -FI_EOPBADSTATE;
-
-		/* At the time of enabling endpoint, FI_OPT_BUFFERED_MIN,
-		 * FI_OPT_BUFFERED_LIMIT should have been frozen so we can
-		 * create the rendezvous protocol message pool with the right
-		 * size */
-		ret = rxm_ep_txrx_pool_create(rxm_ep);
-		if (ret)
-			return ret;
-
-		if (rxm_ep->srx_ctx) {
-			ret = rxm_ep_prepost_buf(rxm_ep, rxm_ep->srx_ctx);
-			if (ret) {
-				rxm_cmap_free(rxm_ep->cmap);
-				FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
-					"Unable to prepost recv bufs\n");
-				goto err;
-			}
-		}
-		break;
-	default:
-		return -FI_ENOSYS;
-	}
-	return 0;
-err:
-	rxm_ep_txrx_pool_destroy(rxm_ep);
-	return ret;
-}
-
-static struct fi_ops rxm_ep_fi_ops = {
-	.size = sizeof(struct fi_ops),
-	.close = rxm_ep_close,
-	.bind = rxm_ep_bind,
-	.control = rxm_ep_ctrl,
-	.ops_open = fi_no_ops_open,
-};
-
-static int rxm_listener_open(struct rxm_ep *rxm_ep)
-{
-	struct rxm_fabric *rxm_fabric;
-	struct fi_eq_attr eq_attr;
-	eq_attr.wait_obj = FI_WAIT_UNSPEC;
-	eq_attr.flags = FI_WRITE;
-	int ret;
-
-	rxm_fabric = container_of(rxm_ep->util_ep.domain->fabric,
-				  struct rxm_fabric, util_fabric);
-
-	ret = fi_eq_open(rxm_fabric->msg_fabric, &eq_attr, &rxm_ep->msg_eq, NULL);
-	if (ret) {
-		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to open msg EQ\n");
-		return ret;
-	}
-
-	ret = fi_passive_ep(rxm_fabric->msg_fabric, rxm_ep->msg_info,
-			    &rxm_ep->msg_pep, rxm_ep);
-	if (ret) {
-		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to open msg PEP\n");
-		goto err;
-	}
-
-	ret = fi_pep_bind(rxm_ep->msg_pep, &rxm_ep->msg_eq->fid, 0);
-	if (ret) {
-		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
-				"Unable to bind msg PEP to msg EQ\n");
-		goto err;
-	}
-
-	return 0;
-err:
-	rxm_listener_close(rxm_ep);
-	return ret;
-}
-
 static void rxm_ep_eager_init(struct rxm_ep *rxm_ep)
 {
 	size_t param;
@@ -2197,17 +2115,24 @@ static void rxm_ep_settings_init(struct rxm_ep *rxm_ep)
 
 	rxm_ep->inject_limit = rxm_ep->rxm_info->tx_attr->inject_size;
 
-	if (rxm_ep->inject_limit > (sizeof(struct rxm_pkt) + sizeof(struct rxm_rndv_hdr)))
-		rxm_ep->buffered_min = (rxm_ep->inject_limit -
-					(sizeof(struct rxm_pkt) +
-					 sizeof(struct rxm_rndv_hdr)));
-	else
-		assert(!rxm_ep->buffered_min);
+	if (!rxm_ep->buffered_min) {
+		if (rxm_ep->inject_limit >
+		    (sizeof(struct rxm_pkt) + sizeof(struct rxm_rndv_hdr)))
+			rxm_ep->buffered_min = (rxm_ep->inject_limit -
+						(sizeof(struct rxm_pkt) +
+						 sizeof(struct rxm_rndv_hdr)));
+		else
+			assert(!rxm_ep->buffered_min);
+	}
 
 	rxm_ep_eager_init(rxm_ep);
 
-	rxm_ep->min_multi_recv_size = rxm_ep->eager_limit;
- 	rxm_ep->buffered_limit = rxm_ep->eager_limit;
+	rxm_ep->min_multi_recv_size = rxm_ep->min_multi_recv_size ?
+				      rxm_ep->min_multi_recv_size :
+				      rxm_ep->eager_limit;
+ 	rxm_ep->buffered_limit = rxm_ep->buffered_limit ?
+				 rxm_ep->buffered_limit :
+				 rxm_ep->eager_limit;
 
 	rxm_ep_sar_init(rxm_ep);
 
@@ -2224,6 +2149,160 @@ static void rxm_ep_settings_init(struct rxm_ep *rxm_ep)
 
 	assert((rxm_ep->inject_limit <= rxm_ep->eager_limit) &&
 	       (rxm_ep->eager_limit <= rxm_ep->sar_limit));
+}
+
+static int
+rxm_ep_inject_pkt_alloc(struct rxm_ep *rxm_ep, struct rxm_pkt **inject_pkt,
+			uint8_t op)
+{
+	*inject_pkt = calloc(1, rxm_ep->inject_limit +
+				sizeof(**inject_pkt));
+	if (!(*inject_pkt))
+		return -FI_ENOMEM;
+
+	(*inject_pkt)->ctrl_hdr.version = RXM_CTRL_VERSION;
+	(*inject_pkt)->ctrl_hdr.type = ofi_ctrl_data;
+	(*inject_pkt)->hdr.version = OFI_OP_VERSION;
+	(*inject_pkt)->hdr.op = op;
+
+	return FI_SUCCESS;
+}
+
+static int rxm_ep_txrx_res_open(struct rxm_ep *rxm_ep)
+{
+	int ret;
+
+	rxm_ep_settings_init(rxm_ep);
+
+	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
+		rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire_noop;
+		rxm_ep->res_fastlock_release = ofi_fastlock_release_noop;
+
+		ret = rxm_ep_inject_pkt_alloc(rxm_ep, &rxm_ep->inject_tx_pkt,
+					      ofi_op_msg);
+		if (ret)
+			return ret;
+		ret = rxm_ep_inject_pkt_alloc(rxm_ep, &rxm_ep->tinject_tx_pkt,
+					      ofi_op_tagged);
+		if (ret) {
+			free(rxm_ep->inject_tx_pkt);
+			return ret;
+		}
+
+		rxm_ops_msg.inject = rxm_ep_inject_fast;
+		rxm_ops_msg.injectdata = rxm_ep_injectdata_fast;
+		rxm_ops_tagged.inject = rxm_ep_tinject_fast;
+		rxm_ops_tagged.injectdata = rxm_ep_tinjectdata_fast;
+	} else {
+		rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire;
+		rxm_ep->res_fastlock_release = ofi_fastlock_release;
+	}
+
+	ret = rxm_ep_txrx_pool_create(rxm_ep);
+	if (ret)
+		goto err1;
+
+	dlist_init(&rxm_ep->deferred_tx_conn_queue);
+
+	ret = rxm_ep_rx_queue_init(rxm_ep);
+	if (ret)
+		goto err2;
+
+	return FI_SUCCESS;
+err2:
+	rxm_ep_txrx_pool_destroy(rxm_ep);
+err1:
+	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
+		free(rxm_ep->inject_tx_pkt);
+		free(rxm_ep->tinject_tx_pkt);
+	}
+	return ret;
+}
+
+static int rxm_ep_ctrl(struct fid *fid, int command, void *arg)
+{
+	struct rxm_ep *rxm_ep;
+	int ret;
+
+	rxm_ep = container_of(fid, struct rxm_ep, util_ep.ep_fid.fid);
+
+	switch (command) {
+	case FI_ENABLE:
+		if (!rxm_ep->util_ep.rx_cq || !rxm_ep->util_ep.tx_cq)
+			return -FI_ENOCQ;
+		if (!rxm_ep->util_ep.av || !rxm_ep->cmap)
+			return -FI_EOPBADSTATE;
+
+		/* At the time of enabling endpoint, FI_OPT_BUFFERED_MIN,
+		 * FI_OPT_BUFFERED_LIMIT should have been frozen so we can
+		 * create the rendezvous protocol message pool with the right
+		 * size */
+		ret = rxm_ep_txrx_res_open(rxm_ep);
+		if (ret)
+			return ret;		
+
+		if (rxm_ep->srx_ctx) {
+			ret = rxm_ep_prepost_buf(rxm_ep, rxm_ep->srx_ctx);
+			if (ret) {
+				rxm_cmap_free(rxm_ep->cmap);
+				FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
+					"Unable to prepost recv bufs\n");
+				goto err;
+			}
+		}
+		break;
+	default:
+		return -FI_ENOSYS;
+	}
+	return 0;
+err:
+	rxm_ep_txrx_res_close(rxm_ep);
+	return ret;
+}
+
+static struct fi_ops rxm_ep_fi_ops = {
+	.size = sizeof(struct fi_ops),
+	.close = rxm_ep_close,
+	.bind = rxm_ep_bind,
+	.control = rxm_ep_ctrl,
+	.ops_open = fi_no_ops_open,
+};
+
+static int rxm_listener_open(struct rxm_ep *rxm_ep)
+{
+	struct rxm_fabric *rxm_fabric;
+	struct fi_eq_attr eq_attr;
+	eq_attr.wait_obj = FI_WAIT_UNSPEC;
+	eq_attr.flags = FI_WRITE;
+	int ret;
+
+	rxm_fabric = container_of(rxm_ep->util_ep.domain->fabric,
+				  struct rxm_fabric, util_fabric);
+
+	ret = fi_eq_open(rxm_fabric->msg_fabric, &eq_attr, &rxm_ep->msg_eq, NULL);
+	if (ret) {
+		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to open msg EQ\n");
+		return ret;
+	}
+
+	ret = fi_passive_ep(rxm_fabric->msg_fabric, rxm_ep->msg_info,
+			    &rxm_ep->msg_pep, rxm_ep);
+	if (ret) {
+		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to open msg PEP\n");
+		goto err;
+	}
+
+	ret = fi_pep_bind(rxm_ep->msg_pep, &rxm_ep->msg_eq->fid, 0);
+	if (ret) {
+		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
+				"Unable to bind msg PEP to msg EQ\n");
+		goto err;
+	}
+
+	return 0;
+err:
+	rxm_listener_close(rxm_ep);
+	return ret;
 }
 
 static int rxm_ep_msg_res_open(struct rxm_ep *rxm_ep)
@@ -2269,70 +2348,6 @@ err1:
 	return ret;
 }
 
-static int
-rxm_ep_inject_pkt_alloc(struct rxm_ep *rxm_ep, struct rxm_pkt **inject_pkt,
-			uint8_t op)
-{
-	*inject_pkt = calloc(1, rxm_ep->inject_limit +
-				sizeof(**inject_pkt));
-	if (!(*inject_pkt))
-		return -FI_ENOMEM;
-
-	(*inject_pkt)->ctrl_hdr.version = RXM_CTRL_VERSION;
-	(*inject_pkt)->ctrl_hdr.type = ofi_ctrl_data;
-	(*inject_pkt)->hdr.version = OFI_OP_VERSION;
-	(*inject_pkt)->hdr.op = op;
-
-	return FI_SUCCESS;
-}
-
-static int rxm_ep_txrx_res_open(struct rxm_ep *rxm_ep)
-{
-	int ret;
-
-	FI_DBG(&rxm_prov, FI_LOG_EP_CTRL,
-	       "MSG provider mr_mode & FI_MR_LOCAL: %d\n",
-	       rxm_ep->msg_mr_local);
-
-	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
-		rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire_noop;
-		rxm_ep->res_fastlock_release = ofi_fastlock_release_noop;
-
-		ret = rxm_ep_inject_pkt_alloc(rxm_ep, &rxm_ep->inject_tx_pkt,
-					      ofi_op_msg);
-		if (ret)
-			return ret;
-		ret = rxm_ep_inject_pkt_alloc(rxm_ep, &rxm_ep->tinject_tx_pkt,
-					      ofi_op_tagged);
-		if (ret) {
-			free(rxm_ep->inject_tx_pkt);
-			return ret;
-		}
-
-		rxm_ops_msg.inject = rxm_ep_inject_fast;
-		rxm_ops_msg.injectdata = rxm_ep_injectdata_fast;
-		rxm_ops_tagged.inject = rxm_ep_tinject_fast;
-		rxm_ops_tagged.injectdata = rxm_ep_tinjectdata_fast;
-	} else {
-		rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire;
-		rxm_ep->res_fastlock_release = ofi_fastlock_release;
-	}
-
-	dlist_init(&rxm_ep->deferred_tx_conn_queue);
-
-	ret = rxm_ep_rx_queue_init(rxm_ep);
-	if (ret)
-		goto err1;
-
-	return FI_SUCCESS;
-err1:
-	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
-		free(rxm_ep->inject_tx_pkt);
-		free(rxm_ep->tinject_tx_pkt);
-	}
-	return ret;
-}
-
 int rxm_endpoint(struct fid_domain *domain, struct fi_info *info,
 		 struct fid_ep **ep_fid, void *context)
 {
@@ -2359,8 +2374,6 @@ int rxm_endpoint(struct fid_domain *domain, struct fi_info *info,
 		ret = ofi_endpoint_init(domain, &rxm_util_prov,
 					info, &rxm_ep->util_ep,
 					context, &rxm_ep_progress_one);
-		if (ret)
-			goto err1;
 	}
 	if (ret)
 		goto err1;
@@ -2368,12 +2381,6 @@ int rxm_endpoint(struct fid_domain *domain, struct fi_info *info,
 	ret = rxm_ep_msg_res_open(rxm_ep);
 	if (ret)
 		goto err2;
-
-	rxm_ep_settings_init(rxm_ep);
-
-	ret = rxm_ep_txrx_res_open(rxm_ep);
-	if (ret)
-		goto err3;
 
 	slistfd_init(&rxm_ep->msg_eq_entry_list);
 	fastlock_init(&rxm_ep->msg_eq_entry_list_lock);
@@ -2387,8 +2394,6 @@ int rxm_endpoint(struct fid_domain *domain, struct fi_info *info,
 	(*ep_fid)->rma = &rxm_ops_rma;
 
 	return 0;
-err3:
-	rxm_ep_msg_res_close(rxm_ep);
 err2:
 	ofi_endpoint_close(&rxm_ep->util_ep);
 err1:
