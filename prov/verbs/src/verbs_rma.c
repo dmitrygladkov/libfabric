@@ -250,7 +250,7 @@ fi_ibv_msg_ep_rma_inject_writedata_fast(struct fid_ep *ep_fid, const void *buf, 
 	return ret;
 }
 
-struct fi_ops_rma fi_ibv_msg_ep_rma_ops_ts = {
+const struct fi_ops_rma fi_ibv_msg_ep_rma_ops_ts = {
 	.size = sizeof(struct fi_ops_rma),
 	.read = fi_ibv_msg_ep_rma_read,
 	.readv = fi_ibv_msg_ep_rma_readv,
@@ -263,7 +263,7 @@ struct fi_ops_rma fi_ibv_msg_ep_rma_ops_ts = {
 	.injectdata = fi_ibv_msg_ep_rma_inject_writedata,
 };
 
-struct fi_ops_rma fi_ibv_msg_ep_rma_ops = {
+const struct fi_ops_rma fi_ibv_msg_ep_rma_ops = {
 	.size = sizeof(struct fi_ops_rma),
 	.read = fi_ibv_msg_ep_rma_read,
 	.readv = fi_ibv_msg_ep_rma_readv,
@@ -496,7 +496,7 @@ fi_ibv_msg_xrc_ep_rma_inject_writedata_fast(struct fid_ep *ep_fid,
 	return ret;
 }
 
-struct fi_ops_rma fi_ibv_msg_xrc_ep_rma_ops_ts = {
+const struct fi_ops_rma fi_ibv_msg_xrc_ep_rma_ops_ts = {
 	.size = sizeof(struct fi_ops_rma),
 	.read = fi_ibv_msg_xrc_ep_rma_read,
 	.readv = fi_ibv_msg_xrc_ep_rma_readv,
@@ -509,7 +509,7 @@ struct fi_ops_rma fi_ibv_msg_xrc_ep_rma_ops_ts = {
 	.injectdata = fi_ibv_msg_xrc_ep_rma_inject_writedata,
 };
 
-struct fi_ops_rma fi_ibv_msg_xrc_ep_rma_ops = {
+const struct fi_ops_rma fi_ibv_msg_xrc_ep_rma_ops = {
 	.size = sizeof(struct fi_ops_rma),
 	.read = fi_ibv_msg_xrc_ep_rma_read,
 	.readv = fi_ibv_msg_xrc_ep_rma_readv,
