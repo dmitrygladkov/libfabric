@@ -2250,6 +2250,13 @@ static int rxm_ep_ctrl(struct fid *fid, int command, void *arg)
 				goto err;
 			}
 		}
+
+		if (!rxm_ep->inject_limit) {
+			rxm_ep->util_ep.ep_fid.msg->inject = fi_no_msg_inject;
+			rxm_ep->util_ep.ep_fid.msg->injectdata = fi_no_msg_injectdata;
+			rxm_ep->util_ep.ep_fid.tagged->inject = fi_no_tagged_inject;
+			rxm_ep->util_ep.ep_fid.tagged->injectdata = fi_no_tagged_injectdata;
+		}
 		break;
 	default:
 		return -FI_ENOSYS;
