@@ -1615,7 +1615,7 @@ static ssize_t rxm_ep_injectdata_fast(struct fid_ep *ep_fid, const void *buf, si
 					    0, rxm_ep->inject_tx_pkt);
 }
 
-static struct fi_ops_msg rxm_ops_msg = {
+static const struct fi_ops_msg rxm_ops_msg = {
 	.size = sizeof(struct fi_ops_msg),
 	.recv = rxm_ep_recv,
 	.recvv = rxm_ep_recvv,
@@ -1770,7 +1770,7 @@ static ssize_t rxm_ep_tinjectdata_fast(struct fid_ep *ep_fid, const void *buf, s
 					    tag, rxm_ep->tinject_tx_pkt);
 }
 
-struct fi_ops_tagged rxm_ops_tagged = {
+static const struct fi_ops_tagged rxm_ops_tagged = {
 	.size = sizeof(struct fi_ops_tagged),
 	.recv = rxm_ep_trecv,
 	.recvv = rxm_ep_trecvv,
@@ -1854,6 +1854,9 @@ static int rxm_ep_close(struct fid *fid)
 	ret = rxm_ep_msg_res_close(rxm_ep);
 	if (ret)
 		retv = ret;
+
+	free(rxm_ep->util_ep.ep_fid.msg);
+	free(rxm_ep->util_ep.ep_fid.tagged);
 
 	ofi_endpoint_close(&rxm_ep->util_ep);
 	fi_freeinfo(rxm_ep->rxm_info);
@@ -2190,11 +2193,6 @@ static int rxm_ep_txrx_res_open(struct rxm_ep *rxm_ep)
 			free(rxm_ep->inject_tx_pkt);
 			return ret;
 		}
-
-		rxm_ops_msg.inject = rxm_ep_inject_fast;
-		rxm_ops_msg.injectdata = rxm_ep_injectdata_fast;
-		rxm_ops_tagged.inject = rxm_ep_tinject_fast;
-		rxm_ops_tagged.injectdata = rxm_ep_tinjectdata_fast;
 	} else {
 		rxm_ep->res_fastlock_acquire = ofi_fastlock_acquire;
 		rxm_ep->res_fastlock_release = ofi_fastlock_release;
@@ -2391,11 +2389,34 @@ int rxm_endpoint(struct fid_domain *domain, struct fi_info *info,
 	(*ep_fid)->fid.ops = &rxm_ep_fi_ops;
 	(*ep_fid)->ops = &rxm_ops_ep;
 	(*ep_fid)->cm = &rxm_ops_cm;
-	(*ep_fid)->msg = &rxm_ops_msg;
-	(*ep_fid)->tagged = &rxm_ops_tagged;
 	(*ep_fid)->rma = &rxm_ops_rma;
 
+	(*ep_fid)->msg = calloc(1, sizeof(*(*ep_fid)->msg));
+	if (!(*ep_fid)->msg) {
+		ret = -FI_ENOMEM;
+		goto err3;
+	}
+	*(*ep_fid)->msg = rxm_ops_msg;
+
+  	(*ep_fid)->tagged = calloc(1, sizeof(*(*ep_fid)->tagged));
+	if (!(*ep_fid)->tagged) {
+		ret = -FI_ENOMEM;
+		goto err4;
+	}
+	*(*ep_fid)->tagged = rxm_ops_tagged;
+
+	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
+		(*ep_fid)->msg->inject = rxm_ep_inject_fast;
+		(*ep_fid)->msg->injectdata = rxm_ep_injectdata_fast;
+		(*ep_fid)->tagged->inject = rxm_ep_tinject_fast;
+		(*ep_fid)->tagged->injectdata = rxm_ep_tinjectdata_fast;
+	}
+
 	return 0;
+err4:
+	free((*ep_fid)->msg);
+err3:
+	rxm_ep_msg_res_close(rxm_ep);
 err2:
 	ofi_endpoint_close(&rxm_ep->util_ep);
 err1:
