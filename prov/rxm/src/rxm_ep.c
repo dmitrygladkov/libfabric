@@ -2069,7 +2069,7 @@ static void rxm_ep_eager_init(struct rxm_ep *rxm_ep)
 		}
 		rxm_ep->eager_limit = param;
 	} else {
-		rxm_ep->eager_limit = RXM_BUF_SIZE - sizeof(struct rxm_pkt);
+		rxm_ep->eager_limit = RXM_EAGER_LIMIT - sizeof(struct rxm_pkt);
 
 		assert(rxm_ep->eager_limit >= min_eager_val);
 	}
