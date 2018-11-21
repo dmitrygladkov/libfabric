@@ -870,7 +870,7 @@ rxm_ep_msg_inject_send(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 	       " tag: 0x%" PRIx64 "\n", pkt_size, tx_pkt->hdr.tag);
 
 	assert((tx_pkt->hdr.flags & FI_REMOTE_CQ_DATA) || !tx_pkt->hdr.flags);
-	assert((pkt_size - sizeof(struct rxm_pkt)) <= rxm_ep->inject_limit);
+	assert((pkt_size - sizeof(struct rxm_pkt)) < rxm_ep->inject_upper_limit);
 
 	ssize_t ret = fi_inject(rxm_conn->msg_ep, tx_pkt, pkt_size, 0);
 	if (OFI_LIKELY(!ret)) {
@@ -1161,7 +1161,7 @@ rxm_ep_inject_data_send_fast(struct rxm_ep *rxm_ep, const void *buf, size_t len,
 	struct rxm_conn *rxm_conn;
 	ssize_t ret;
 
-	assert(len <= rxm_ep->inject_limit);
+	assert(len < rxm_ep->inject_upper_limit);
 
 	ret = rxm_ep_prepare_tx(rxm_ep, dest_addr, &rxm_conn);
 	if (OFI_UNLIKELY(ret))
@@ -1187,7 +1187,7 @@ rxm_ep_inject_send_fast(struct rxm_ep *rxm_ep, const void *buf, size_t len,
 	struct rxm_conn *rxm_conn;
 	ssize_t ret;
 
-	assert(len <= rxm_ep->inject_limit);
+	assert(len < rxm_ep->inject_upper_limit);
 
 	ret = rxm_ep_prepare_tx(rxm_ep, dest_addr, &rxm_conn);
 	if (OFI_UNLIKELY(ret))
@@ -1212,7 +1212,7 @@ rxm_ep_inject_send(struct rxm_ep *rxm_ep, const void *buf, size_t len,
 	struct rxm_tx_base_buf *tx_buf;
 	ssize_t ret;
 
-	assert(len <= rxm_ep->inject_limit);
+	assert(len < rxm_ep->inject_upper_limit);
 
 	ret = rxm_ep_prepare_tx(rxm_ep, dest_addr, &rxm_conn);
 	if (OFI_UNLIKELY(ret))
@@ -1246,7 +1246,7 @@ rxm_ep_inject_send_common(struct rxm_ep *rxm_ep, const struct iovec *iov, size_t
 {
 	int ret;
 
-	assert(data_len <= rxm_ep->inject_limit);
+	assert(data_len < rxm_ep->inject_upper_limit);
 
 	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
 		inject_pkt->hdr.size = data_len;	
@@ -1306,14 +1306,14 @@ rxm_ep_send_common(struct rxm_ep *rxm_ep, const struct iovec *iov, void **desc,
 	ssize_t ret;
 
 	assert(count <= rxm_ep->rxm_info->tx_attr->iov_limit);
-	assert((!(flags & FI_INJECT) && (data_len > rxm_ep->inject_limit)) ||
-	       (data_len <= rxm_ep->inject_limit));
+	assert((!(flags & FI_INJECT) && (data_len >= rxm_ep->inject_upper_limit)) ||
+	       (data_len < rxm_ep->inject_upper_limit));
 
 	ret = rxm_ep_prepare_tx(rxm_ep, dest_addr, &rxm_conn);
 	if (OFI_UNLIKELY(ret))
 		return ret;
 
-	if (data_len <= rxm_ep->inject_limit) {
+	if (data_len < rxm_ep->inject_upper_limit) {
 		return rxm_ep_inject_send_common(rxm_ep, iov, count, rxm_conn,
 						 context, data, flags, tag, op,
 						 data_len, inject_pkt);
@@ -2119,6 +2119,13 @@ static void rxm_ep_settings_init(struct rxm_ep *rxm_ep)
 	rxm_ep->rxm_mr_local = ofi_mr_local(rxm_ep->rxm_info);
 
 	rxm_ep->inject_limit = rxm_ep->rxm_info->tx_attr->inject_size;
+	/* Adjust RxM inject limit that is used when compraring with user data length.
+	 * This value = 0 if the maximum supported inject limit = 0. Otherwise, this
+	 * value = (maximum supported inject limit + 1).
+	 * This allows to use full inject range and ensure that MSG `fi_inject` won't
+	 * be used in case of the maximum supported inject limit = 0. */
+	rxm_ep->inject_upper_limit = (rxm_ep->inject_limit ?
+				      (rxm_ep->inject_limit + 1) : 0);
 
 	if (!rxm_ep->buffered_min) {
 		if (rxm_ep->inject_limit >

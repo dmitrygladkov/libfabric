@@ -633,6 +633,8 @@ struct rxm_ep {
 	size_t			buffered_limit;
 
 	size_t			inject_limit;
+	/* This must be used when comparing with user data length */
+	size_t			inject_upper_limit;
 	size_t			eager_limit;
 	size_t			sar_limit;
 
