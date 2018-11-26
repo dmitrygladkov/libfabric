@@ -294,14 +294,6 @@ struct rxm_cm_data {
 	struct rxm_ep_wire_proto proto;
 };
 
-struct rxm_rndv_hdr {
-	struct ofi_rma_iov iov[RXM_IOV_LIMIT];
-	uint8_t count;
-};
-
-#define rxm_pkt_rndv_data(rxm_pkt) \
-	((rxm_pkt)->data + sizeof(struct rxm_rndv_hdr))
-
 /*
  * Macros to generate enums and associated string values
  * e.g.
@@ -347,23 +339,39 @@ enum rxm_sar_seg_type {
 };
 
 struct rxm_hdr {
-	uint8_t		type;
-	uint8_t		op;
-	uint8_t		seg_type;
-	uint16_t	seg_size;
-	uint32_t	seg_no;
-	uint32_t	flags;
-	uint64_t	conn_id;
-	uint64_t	msg_id;
-	uint64_t	data;
-	uint64_t	tag;
-	uint64_t	size;
+	uint8_t type;
+	uint8_t op;
+	uint32_t flags;
+	uint64_t conn_id;
+	uint64_t data;
+	uint64_t tag;
 };
 
 struct rxm_pkt {
 	struct rxm_hdr hdr;
 	char data[];
 };
+
+struct rxm_sar_hdr {
+	uint8_t seg_type;
+	uint16_t seg_size;
+	uint32_t seg_no;
+	uint64_t msg_id;
+	uint64_t size;
+
+	char data[];
+};
+
+struct rxm_rndv_hdr {
+	uint64_t msg_id;
+	uint64_t size;
+
+	struct ofi_rma_iov iov[RXM_IOV_LIMIT];
+	uint8_t count;
+};
+
+#define rxm_pkt_rndv_data(rxm_pkt) \
+	((rxm_pkt)->data + sizeof(struct rxm_rndv_hdr))
 
 struct rxm_recv_match_attr {
 	fi_addr_t addr;

@@ -800,6 +800,8 @@ static ssize_t rxm_cq_handle_comp(struct rxm_ep *rxm_ep,
 
 		switch (rx_buf->pkt.hdr.type) {
 		case ofi_ctrl_data:
+			rx_buf->pkt.hdr.size = comp->len - sizeof(rx_buf->pkt.hdr);
+			/* FALL THROUGH */
 		case ofi_ctrl_large_data:
 			return rxm_handle_recv_comp(rx_buf);
 		case ofi_ctrl_ack:
