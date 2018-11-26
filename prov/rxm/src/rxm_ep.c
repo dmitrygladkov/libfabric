@@ -128,7 +128,7 @@ static void rxm_buf_reg_set_common(struct rxm_buf *hdr, struct rxm_pkt *pkt,
 				   uint8_t type, void *mr_desc)
 {
 	if (pkt) {
-		pkt->ctrl_hdr.version = RXM_CTRL_VERSION;
+	    //pkt->ctrl_hdr.version = RXM_CTRL_VERSION;
 		pkt->hdr.version = OFI_OP_VERSION;
 		pkt->ctrl_hdr.type = type;
 	}
@@ -980,11 +980,11 @@ rxm_ep_msg_inject_send(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 		       struct rxm_pkt *tx_pkt, size_t pkt_size,
 		       ofi_cntr_inc_func cntr_inc_func)
 {
-	FI_DBG(&rxm_prov, FI_LOG_EP_DATA, "Posting inject with length: %" PRIu64
-	       " tag: 0x%" PRIx64 "\n", pkt_size, tx_pkt->hdr.tag);
+    //FI_DBG(&rxm_prov, FI_LOG_EP_DATA, "Posting inject with length: %" PRIu64
+	       //       " tag: 0x%" PRIx64 "\n", pkt_size, tx_pkt->hdr.tag);
 
-	assert((tx_pkt->hdr.flags & FI_REMOTE_CQ_DATA) || !tx_pkt->hdr.flags);
-	assert((pkt_size - sizeof(struct rxm_pkt)) < rxm_ep->inject_upper_limit);
+	//assert((tx_pkt->hdr.flags & FI_REMOTE_CQ_DATA) || !tx_pkt->hdr.flags);
+	//assert((pkt_size - sizeof(struct rxm_eager_pkt)) < rxm_ep->inject_upper_limit);
 
 	ssize_t ret = fi_inject(rxm_conn->msg_ep, tx_pkt, pkt_size, 0);
 	if (OFI_LIKELY(!ret)) {
@@ -1273,10 +1273,9 @@ rxm_ep_inject_send_fast(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 {
 	assert(len < rxm_ep->inject_upper_limit);
 
-	rxm_conn->inject_pkt->hdr.size = len;
 	memcpy(rxm_conn->inject_pkt->data, buf, len);
 
-	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, rxm_conn->inject_pkt,
+	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, (void *) rxm_conn->inject_pkt,
 				      len + sizeof(*rxm_conn->inject_pkt),
 				      rxm_ep->util_ep.tx_cntr_inc);
 }
@@ -1287,12 +1286,10 @@ rxm_ep_inject_data_send_fast(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 {
 	assert(len < rxm_ep->inject_upper_limit);
 
-	rxm_conn->inject_data_pkt->hdr.size = len;
-	rxm_conn->inject_data_pkt->hdr.data = data;
 	memcpy(rxm_conn->inject_pkt->data, buf, len);
 
-	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, rxm_conn->inject_data_pkt,
-				      len + sizeof(*rxm_conn->inject_data_pkt),
+	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, (void *) rxm_conn->inject_pkt,
+				      len + sizeof(*rxm_conn->inject_pkt),
 				      rxm_ep->util_ep.tx_cntr_inc);
 }
 
@@ -1302,11 +1299,10 @@ rxm_ep_tinject_send_fast(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 {
 	assert(len < rxm_ep->inject_upper_limit);
 
-	rxm_conn->tinject_pkt->hdr.size = len;
-	rxm_conn->tinject_pkt->hdr.tag = tag;
+	rxm_conn->tinject_pkt->tag = tag;
 	memcpy(rxm_conn->tinject_pkt->data, buf, len);
 
-	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, rxm_conn->tinject_pkt,
+	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, (void *) rxm_conn->tinject_pkt,
 				      len + sizeof(*rxm_conn->tinject_pkt),
 				      rxm_ep->util_ep.tx_cntr_inc);
 }
@@ -1318,13 +1314,11 @@ rxm_ep_tinject_data_send_fast(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 {
 	assert(len < rxm_ep->inject_upper_limit);
 
-	rxm_conn->tinject_data_pkt->hdr.size = len;
-	rxm_conn->tinject_data_pkt->hdr.tag = tag;
-	rxm_conn->tinject_data_pkt->hdr.data = data;
-	memcpy(rxm_conn->tinject_data_pkt->data, buf, len);
+	rxm_conn->tinject_pkt->tag = tag;
+	memcpy(rxm_conn->tinject_pkt->data, buf, len);
 
-	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, rxm_conn->tinject_data_pkt,
-				      len + sizeof(*rxm_conn->tinject_data_pkt),
+	return rxm_ep_msg_inject_send(rxm_ep, rxm_conn, (void *) rxm_conn->tinject_pkt,
+				      len + sizeof(*rxm_conn->tinject_pkt),
 				      rxm_ep->util_ep.tx_cntr_inc);
 }
 
@@ -1371,7 +1365,6 @@ rxm_ep_inject_send_common(struct rxm_ep *rxm_ep, const struct iovec *iov, size_t
 	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
 		uint64_t saved_flags = inject_pkt->hdr.flags;
 
-		inject_pkt->hdr.size = data_len;	
 		inject_pkt->hdr.tag = tag;
 		inject_pkt->hdr.flags = (flags & FI_REMOTE_CQ_DATA);
 		inject_pkt->hdr.data = data;
@@ -1647,7 +1640,7 @@ static ssize_t rxm_ep_sendmsg(struct fid_ep *ep_fid, const struct fi_msg *msg,
 	return rxm_ep_send_common(rxm_ep, rxm_conn, msg->msg_iov, msg->desc,
 				  msg->iov_count, msg->context, msg->data,
 				  flags | (rxm_ep_tx_flags(rxm_ep) & FI_COMPLETION),
-				  0, ofi_op_msg, rxm_conn->inject_data_pkt);
+				  0, ofi_op_msg, rxm_conn->inject_pkt);
 }
 
 static ssize_t rxm_ep_send(struct fid_ep *ep_fid, const void *buf, size_t len,
@@ -1734,7 +1727,7 @@ static ssize_t rxm_ep_senddata(struct fid_ep *ep_fid, const void *buf, size_t le
 
 	return rxm_ep_send_common(rxm_ep, rxm_conn, &iov, desc, 1, context, data,
 				  rxm_ep_tx_flags(rxm_ep) | FI_REMOTE_CQ_DATA,
-				  0, ofi_op_msg, rxm_conn->inject_data_pkt);
+				  0, ofi_op_msg, rxm_conn->inject_pkt);
 }
 
 static ssize_t rxm_ep_injectdata(struct fid_ep *ep_fid, const void *buf, size_t len,
@@ -1833,7 +1826,7 @@ static ssize_t rxm_ep_tsendmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged
 	return rxm_ep_send_common(rxm_ep, rxm_conn, msg->msg_iov, msg->desc,
 				  msg->iov_count, msg->context, msg->data,
 				  flags | (rxm_ep_tx_flags(rxm_ep) & FI_COMPLETION),
-				  msg->tag, ofi_op_tagged, rxm_conn->tinject_data_pkt);
+				  msg->tag, ofi_op_tagged, rxm_conn->tinject_pkt);
 }
 
 static ssize_t rxm_ep_tsend(struct fid_ep *ep_fid, const void *buf, size_t len,
@@ -1921,7 +1914,7 @@ static ssize_t rxm_ep_tsenddata(struct fid_ep *ep_fid, const void *buf, size_t l
 
 	return rxm_ep_send_common(rxm_ep, rxm_conn, &iov, desc, 1, context, data,
 				  rxm_ep_tx_flags(rxm_ep) | FI_REMOTE_CQ_DATA,
-				  tag, ofi_op_tagged, rxm_conn->tinject_data_pkt);
+				  tag, ofi_op_tagged, rxm_conn->tinject_pkt);
 }
 
 static ssize_t rxm_ep_tinjectdata(struct fid_ep *ep_fid, const void *buf, size_t len,

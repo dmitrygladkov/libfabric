@@ -340,10 +340,114 @@ enum rxm_proto_state {
 
 extern char *rxm_proto_state_str[];
 
+struct rxm_ctrl_hdr {
+	uint8_t				type;
+	uint16_t			seg_size;
+	uint32_t			seg_no;
+	uint64_t			conn_id;
+	uint64_t			msg_id;
+	union {
+		uint64_t		conn_data;
+		uint64_t		rx_key;
+		uint64_t		ctrl_data;
+	};
+};
+
 struct rxm_pkt {
-	struct ofi_ctrl_hdr ctrl_hdr;
+	struct rxm_ctrl_hdr ctrl_hdr;
 	struct ofi_op_hdr hdr;
 	char data[];
+};
+
+enum rxm_pkt_type {
+	rxm_eager_pkt,
+	rxm_tagged_eager_pkt,
+	rxm_sar_pkt,
+	rxm_tagged_sar_pkt,
+	rxm_rndv_pkt,
+	rxm_tagged_rndv_pkt,
+};
+
+struct rxm_eager_pkt {
+	uint8_t type;
+
+	uint64_t conn_id : 56;
+
+	uint8_t data[];
+};
+
+struct rxm_tagged_eager_pkt {
+	uint8_t type;
+
+	uint64_t conn_id : 56;
+	uint64_t tag;
+
+	uint8_t data[];
+};
+
+struct rxm_sar_pkt {
+	uint8_t type;
+
+	uint8_t seg_type;
+	uint16_t seg_no;
+	uint64_t conn_id : 56;
+	uint64_t msg_id;
+
+	uint8_t data[];
+};
+
+struct rxm_tagged_sar_pkt {
+	uint8_t type;
+
+	uint8_t seg_type;
+	uint16_t seg_no;
+	uint64_t conn_id : 56;
+	uint64_t msg_id;
+	uint64_t tag;
+
+	uint8_t data[];
+};
+
+struct rxm_rndv_pkt {
+	uint8_t type;
+
+	uint8_t iov_count;
+	uint64_t conn_id : 56;
+	uint64_t msg_id;
+
+	uint8_t data[];
+};
+
+struct rxm_tagged_rndv_pkt {
+	uint8_t type;
+
+	uint8_t iov_count;
+	uint64_t conn_id : 56;
+	uint64_t msg_id;
+	uint64_t tag;
+
+	uint8_t data[];
+};
+
+union rxm_rx_pkt {
+	uint8_t type;
+
+	union {
+		struct rxm_eager_pkt eager;
+		struct rxm_tagged_eager_pkt tagged_eager;
+
+		struct rxm_sar_pkt sar;
+		struct rxm_tagged_sar_pkt sar_eager;
+
+		struct rxm_rndv_pkt rndv;
+		struct rxm_tagged_rndv_pkt tagged_rndv;
+	} pkt;
+
+    struct {
+	struct rxm_ctrl_hdr ctrl_hdr;
+	struct ofi_op_hdr hdr;
+	char data[];
+    };
 };
 
 union rxm_sar_ctrl_data {
@@ -359,13 +463,13 @@ union rxm_sar_ctrl_data {
 };
 
 static inline enum rxm_sar_seg_type
-rxm_sar_get_seg_type(struct ofi_ctrl_hdr *ctrl_hdr)
+rxm_sar_get_seg_type(struct rxm_ctrl_hdr *ctrl_hdr)
 {
 	return ((union rxm_sar_ctrl_data *)&(ctrl_hdr->ctrl_data))->seg_type;
 }
 
 static inline void
-rxm_sar_set_seg_type(struct ofi_ctrl_hdr *ctrl_hdr, enum rxm_sar_seg_type seg_type)
+rxm_sar_set_seg_type(struct rxm_ctrl_hdr *ctrl_hdr, enum rxm_sar_seg_type seg_type)
 {
 	((union rxm_sar_ctrl_data *)&(ctrl_hdr->ctrl_data))->seg_type = seg_type;
 }
@@ -434,7 +538,7 @@ struct rxm_rx_buf {
 	struct fid_mr *mr[RXM_IOV_LIMIT];
 
 	/* Must stay at bottom */
-	struct rxm_pkt pkt;
+	union rxm_rx_pkt pkt;
 };
 
 struct rxm_tx_base_buf {
@@ -660,10 +764,8 @@ struct rxm_conn {
 	struct fid_ep *msg_ep;
 
 	/* This is used only in non-FI_THREAD_SAFE case */
-	struct rxm_pkt *inject_pkt;
-	struct rxm_pkt *inject_data_pkt;
-	struct rxm_pkt *tinject_pkt;
-	struct rxm_pkt *tinject_data_pkt;
+	struct rxm_eager_pkt *inject_pkt;
+	struct rxm_tagged_eager_pkt *tinject_pkt;
 
 	struct dlist_entry deferred_conn_entry;
 	struct dlist_entry deferred_tx_queue;

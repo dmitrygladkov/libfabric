@@ -719,7 +719,7 @@ static ssize_t rxm_rndv_send_ack_fast(struct rxm_rx_buf *rx_buf)
 
 	pkt.hdr.op		= ofi_op_msg;
 	pkt.hdr.version		= OFI_OP_VERSION;
-	pkt.ctrl_hdr.version	= RXM_CTRL_VERSION;
+	//pkt.ctrl_hdr.version	= RXM_CTRL_VERSION;
 	pkt.ctrl_hdr.type	= ofi_ctrl_ack;
 	pkt.ctrl_hdr.conn_id 	= rx_buf->conn->handle.remote_key;
 	pkt.ctrl_hdr.msg_id 	= rx_buf->pkt.ctrl_hdr.msg_id;
@@ -799,11 +799,13 @@ static ssize_t rxm_cq_handle_comp(struct rxm_ep *rxm_ep,
 	case RXM_RX:
 		rx_buf = comp->op_context;
 		assert(!(comp->flags & FI_REMOTE_READ));
-		assert((rx_buf->pkt.hdr.version == OFI_OP_VERSION) &&
-		       (rx_buf->pkt.ctrl_hdr.version == RXM_CTRL_VERSION));
 
 		switch (rx_buf->pkt.ctrl_hdr.type) {
 		case ofi_ctrl_data:
+		case rxm_eager_pkt:
+		case rxm_tagged_eager_pkt:
+			rx_buf->pkt.hdr.size = comp->len - sizeof(rx_buf->pkt);
+			/* FALL THROUGH */
 		case ofi_ctrl_large_data:
 			return rxm_handle_recv_comp(rx_buf);
 		case ofi_ctrl_ack:
@@ -957,7 +959,7 @@ static inline int rxm_ep_repost_buf(struct rxm_rx_buf *rx_buf)
 	rx_buf->hdr.state = RXM_RX;
 
 	if (fi_recv(rx_buf->msg_ep, &rx_buf->pkt,
-		    rx_buf->ep->eager_limit + sizeof(struct rxm_pkt),
+		    rx_buf->ep->eager_limit + sizeof(rx_buf->pkt),
 		    rx_buf->hdr.desc, FI_ADDR_UNSPEC, rx_buf)) {
 		FI_WARN(&rxm_prov, FI_LOG_EP_CTRL, "Unable to repost buf\n");
 		return -FI_EAVAIL;

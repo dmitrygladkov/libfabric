@@ -180,38 +180,12 @@ void rxm_cmap_del_handle_ts(struct rxm_cmap_handle *handle)
 	cmap->release(&cmap->lock);
 }
 
-static struct rxm_pkt *
-rxm_conn_inject_pkt_alloc(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
-			  uint8_t op, uint64_t flags)
-{
-	struct rxm_pkt *inject_pkt;
-	int ret = ofi_memalign((void **) &inject_pkt, 16,
-			       rxm_ep->inject_limit + sizeof(*inject_pkt));
-
-	if (ret)
-		return NULL;
-
-	memset(inject_pkt, 0, rxm_ep->inject_limit + sizeof(*inject_pkt));
-	inject_pkt->ctrl_hdr.version = RXM_CTRL_VERSION;
-	inject_pkt->ctrl_hdr.type = ofi_ctrl_data;
-	inject_pkt->ctrl_hdr.conn_id = rxm_conn->handle.remote_key;
-	inject_pkt->hdr.version = OFI_OP_VERSION;
-	inject_pkt->hdr.op = op;
-	inject_pkt->hdr.flags = flags;
-
-	return inject_pkt;
-}
-
 static void rxm_conn_res_free(struct rxm_conn *rxm_conn)
 {
 	ofi_freealign(rxm_conn->inject_pkt);
 	rxm_conn->inject_pkt = NULL;
-	ofi_freealign(rxm_conn->inject_data_pkt);
-	rxm_conn->inject_data_pkt = NULL;
 	ofi_freealign(rxm_conn->tinject_pkt);
 	rxm_conn->tinject_pkt = NULL;
-	ofi_freealign(rxm_conn->tinject_data_pkt);
-	rxm_conn->tinject_data_pkt = NULL;
 }
 
 static int rxm_conn_res_alloc(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn)
@@ -221,24 +195,26 @@ static int rxm_conn_res_alloc(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn)
 	dlist_init(&rxm_conn->sar_rx_msg_list);
 
 	if (rxm_ep->util_ep.domain->threading != FI_THREAD_SAFE) {
-		rxm_conn->inject_pkt =
-			rxm_conn_inject_pkt_alloc(rxm_ep, rxm_conn,
-						  ofi_op_msg, 0);
-		rxm_conn->inject_data_pkt =
-			rxm_conn_inject_pkt_alloc(rxm_ep, rxm_conn,
-						  ofi_op_msg, FI_REMOTE_CQ_DATA);
-		rxm_conn->tinject_pkt =
-			rxm_conn_inject_pkt_alloc(rxm_ep, rxm_conn,
-						  ofi_op_tagged, 0);
-		rxm_conn->tinject_data_pkt =
-			rxm_conn_inject_pkt_alloc(rxm_ep, rxm_conn,
-						  ofi_op_tagged, FI_REMOTE_CQ_DATA);
+		int ret = ofi_memalign((void **) &rxm_conn->inject_pkt, 16,
+				       rxm_ep->inject_limit +
+				       sizeof(*rxm_conn->inject_pkt));
 
-		if (!rxm_conn->inject_pkt || !rxm_conn->inject_data_pkt ||
-		    !rxm_conn->tinject_pkt || !rxm_conn->tinject_data_pkt) {
-			rxm_conn_res_free(rxm_conn);
+		if (ret)
+			return -FI_ENOMEM;
+		memset(rxm_conn->inject_pkt, 0, rxm_ep->inject_limit + sizeof(*rxm_conn->inject_pkt));
+		rxm_conn->inject_pkt->type = rxm_eager_pkt;
+		rxm_conn->inject_pkt->conn_id = rxm_conn->handle.remote_key;
+
+		ret =  ofi_memalign((void **) &rxm_conn->tinject_pkt, 16,
+				    rxm_ep->inject_limit +
+				    sizeof(*rxm_conn->tinject_pkt));
+		if (ret) {
+			free(rxm_conn->inject_pkt);
 			return -FI_ENOMEM;
 		}
+		memset(rxm_conn->tinject_pkt, 0, rxm_ep->inject_limit + sizeof(*rxm_conn->tinject_pkt));
+		rxm_conn->tinject_pkt->type = rxm_tagged_eager_pkt;
+		rxm_conn->tinject_pkt->conn_id = rxm_conn->handle.remote_key;
 	}
 
 	return 0;
