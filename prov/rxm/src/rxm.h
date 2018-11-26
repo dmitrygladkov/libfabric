@@ -80,7 +80,7 @@
 
 #define RXM_LOG_STATE(subsystem, pkt, prev_state, next_state) 			\
 	FI_DBG(&rxm_prov, subsystem, "[RNDV] msg_id: 0x%" PRIx64 " %s -> %s\n",	\
-	       pkt.ctrl_hdr.msg_id, rxm_proto_state_str[prev_state],		\
+	       pkt.hdr.msg_id, rxm_proto_state_str[prev_state],		\
 	       rxm_proto_state_str[next_state])
 
 #define RXM_LOG_STATE_TX(subsystem, tx_buf, next_state)		\
@@ -340,34 +340,68 @@ enum rxm_proto_state {
 
 extern char *rxm_proto_state_str[];
 
+enum rxm_pkt_type {
+	rxm_eager,
+	rxm_eager_tag,
+	rxm_sar,
+	rxm_sar_tag,
+	rxm_rndv_req,
+	rxm_rndv_req_tag,
+	rxm_rndv_ack,
+};
+
+enum rxm_sar_seg_type {
+	rxm_sar_seg_first,
+	rxm_sar_seg_middle,
+	rxm_sar_seg_last,
+};
+
+struct rxm_hdr {
+	uint8_t		type;
+	uint8_t		seg_type;
+	uint16_t	seg_size;
+	uint32_t	seg_no;
+	uint32_t	flags;
+	uint64_t	conn_id;
+	uint64_t	msg_id;
+	uint64_t	data;
+	uint64_t	tag;
+	uint64_t	size;
+};
+
 struct rxm_pkt {
-	struct ofi_ctrl_hdr ctrl_hdr;
-	struct ofi_op_hdr hdr;
+	struct rxm_hdr hdr;
 	char data[];
 };
 
-union rxm_sar_ctrl_data {
-	struct {
-		enum rxm_sar_seg_type {
-			RXM_SAR_SEG_FIRST	= 1,
-			RXM_SAR_SEG_MIDDLE	= 2,
-			RXM_SAR_SEG_LAST	= 3,	
-		} seg_type : 2;
-		uint32_t offset;
-	};
-	uint64_t align;
+static const uint64_t rxm_rx_flags[] = {
+	[rxm_eager] = FI_RECV,
+	[rxm_eager_tag] = FI_RECV | FI_TAGGED,
+	[rxm_sar] = FI_RECV,
+	[rxm_sar_tag] = FI_RECV | FI_TAGGED,
+	[rxm_rndv_req] = FI_RECV,
+	[rxm_rndv_req_tag] = FI_RECV | FI_TAGGED,
+};
+
+static const uint64_t rxm_tx_flags[] = {
+	[rxm_eager] = FI_SEND,
+	[rxm_eager_tag] = FI_SEND | FI_TAGGED,
+	[rxm_sar] = FI_SEND,
+	[rxm_sar_tag] = FI_SEND | FI_TAGGED,
+	[rxm_rndv_req] = FI_SEND,
+	[rxm_rndv_req_tag] = FI_SEND | FI_TAGGED,
 };
 
 static inline enum rxm_sar_seg_type
-rxm_sar_get_seg_type(struct ofi_ctrl_hdr *ctrl_hdr)
+rxm_sar_get_seg_type(struct rxm_hdr *hdr)
 {
-	return ((union rxm_sar_ctrl_data *)&(ctrl_hdr->ctrl_data))->seg_type;
+	return hdr->seg_type;
 }
 
 static inline void
-rxm_sar_set_seg_type(struct ofi_ctrl_hdr *ctrl_hdr, enum rxm_sar_seg_type seg_type)
+rxm_sar_set_seg_type(struct rxm_hdr *hdr, enum rxm_sar_seg_type seg_type)
 {
-	((union rxm_sar_ctrl_data *)&(ctrl_hdr->ctrl_data))->seg_type = seg_type;
+	hdr->seg_type = seg_type;
 }
 
 struct rxm_recv_match_attr {
@@ -850,21 +884,22 @@ rxm_process_recv_entry(struct rxm_recv_queue *recv_queue,
 	rx_buf = rxm_check_unexp_msg_list(recv_queue, recv_entry->addr,
 					  recv_entry->tag, recv_entry->ignore);
 	if (rx_buf) {
-		assert((recv_queue->type == RXM_RECV_QUEUE_MSG &&
-			rx_buf->pkt.hdr.op == ofi_op_msg) ||
+	    /*assert((recv_queue->type == RXM_RECV_QUEUE_MSG &&
+			rx_buf->pkt.hdr.type == ofi_op_msg) ||
 		       (recv_queue->type == RXM_RECV_QUEUE_TAGGED &&
-			rx_buf->pkt.hdr.op == ofi_op_tagged));
+		       rx_buf->pkt.hdr.op == ofi_op_tagged));*/
 		dlist_remove(&rx_buf->unexp_msg.entry);
 		rx_buf->recv_entry = recv_entry;
 		ofi_ep_lock_release(&recv_queue->rxm_ep->util_ep);
 
-		if (rx_buf->pkt.ctrl_hdr.type != ofi_ctrl_seg_data) {
+		if ((rx_buf->pkt.hdr.type != rxm_sar) &&
+		    (rx_buf->pkt.hdr.type != rxm_sar_tag)) {
 			return rxm_cq_handle_rx_buf(rx_buf);
 		} else {
 			struct dlist_entry *entry;
 			enum rxm_sar_seg_type last =
-				(rxm_sar_get_seg_type(&rx_buf->pkt.ctrl_hdr)
-								== RXM_SAR_SEG_LAST);
+				(rxm_sar_get_seg_type(&rx_buf->pkt.hdr)
+								== rxm_sar_seg_last);
 			ssize_t ret = rxm_cq_handle_rx_buf(rx_buf);
 			struct rxm_recv_match_attr match_attr;
 
@@ -883,20 +918,21 @@ rxm_process_recv_entry(struct rxm_recv_queue *recv_queue,
 							     &match_attr))
 					continue;
 				/* Handle unordered completions from MSG provider */
-				if ((rx_buf->pkt.ctrl_hdr.msg_id != recv_entry->sar.msg_id) ||
-				    ((rx_buf->pkt.ctrl_hdr.type != ofi_ctrl_seg_data)))
+				if ((rx_buf->pkt.hdr.msg_id != recv_entry->sar.msg_id) ||
+				    ((rx_buf->pkt.hdr.type != rxm_sar) &&
+				     (rx_buf->pkt.hdr.type != rxm_sar_tag)))
 					continue;
 
 				if (!rx_buf->conn) {
 					rx_buf->conn = rxm_key2conn(rx_buf->ep,
-								    rx_buf->pkt.ctrl_hdr.conn_id);
+								    rx_buf->pkt.hdr.conn_id);
 				}
 				if (recv_entry->sar.conn != rx_buf->conn)
 					continue;
 				rx_buf->recv_entry = recv_entry;
 				dlist_remove(&rx_buf->unexp_msg.entry);
-				last = (rxm_sar_get_seg_type(&rx_buf->pkt.ctrl_hdr)
-								== RXM_SAR_SEG_LAST);
+				last = (rxm_sar_get_seg_type(&rx_buf->pkt.hdr)
+								== rxm_sar_seg_last);
 				ofi_ep_lock_release(&recv_queue->rxm_ep->util_ep);
 				ret = rxm_cq_handle_rx_buf(rx_buf);
 				ofi_ep_lock_acquire(&recv_queue->rxm_ep->util_ep);
