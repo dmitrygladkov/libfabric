@@ -284,7 +284,7 @@ struct fi_provider rxm_prov = {
 
 RXM_INI
 {
-	fi_param_define(&rxm_prov, "buffer_size", FI_PARAM_INT,
+    fi_param_define(&rxm_prov, "buffer_size", FI_PARAM_SIZE_T,
 			"Defines the transmit buffer size / inject size. Messages"
 			" of size less than this would be transmitted via an "
 			"eager protocol and those above would be transmitted "
