@@ -469,6 +469,9 @@ void rxm_cmap_process_connect(struct rxm_cmap *cmap,
 		rxm_conn->tinject_pkt->ctrl_hdr.conn_id = rxm_conn->handle.remote_key;
 		rxm_conn->tinject_data_pkt->ctrl_hdr.conn_id = rxm_conn->handle.remote_key;
 	}
+
+	if (handle->connected_cb)
+		handle->connected_cb(handle->handle_ctx);
 }
 
 void rxm_cmap_process_reject(struct rxm_cmap *cmap,
@@ -602,13 +605,18 @@ unlock:
 
 /* Caller must hold `cmap::lock` */
 int rxm_cmap_handle_connect(struct rxm_cmap *cmap, fi_addr_t fi_addr,
-			    struct rxm_cmap_handle *handle)
+			    struct rxm_cmap_handle *handle,
+			    rxm_cmap_handle_connected_cb connected_cb,
+			    void *handle_ctx)
 {
 	int ret;
 
 	if (handle->state == RXM_CMAP_CONNECTED_NOTIFY ||
 	    handle->state == RXM_CMAP_CONNECTED)
 		return FI_SUCCESS;
+
+	handle->connected_cb = connected_cb;
+	handle->handle_ctx = handle_ctx;
 
 	switch (handle->state) {
 	case RXM_CMAP_IDLE:
@@ -650,8 +658,8 @@ int rxm_cmap_handle_unconnected(struct rxm_ep *rxm_ep, struct rxm_cmap_handle *h
 	}
 	/* Since we handling unoonnected state and `cmap:lock`
 	 * is on hold, it shouldn't return 0 */
-	ret = rxm_cmap_handle_connect(rxm_ep->cmap,
-				      dest_addr, handle);
+	ret = rxm_cmap_handle_connect(rxm_ep->cmap, dest_addr,
+				      handle, NULL, NULL);
 	if (OFI_UNLIKELY(ret != -FI_EAGAIN))
 		return ret;
 
@@ -670,7 +678,7 @@ int rxm_cmap_get_handle(struct rxm_cmap *cmap, fi_addr_t fi_addr,
 		goto unlock;
 	}
 
-	ret = rxm_cmap_handle_connect(cmap, fi_addr, *handle_ret);
+	ret = rxm_cmap_handle_connect(cmap, fi_addr, *handle_ret, NULL, NULL);
 unlock:
 	cmap->release(&cmap->lock);
 	return ret;

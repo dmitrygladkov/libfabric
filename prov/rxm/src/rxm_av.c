@@ -64,6 +64,20 @@ static int rxm_av_remove(struct fid_av *av_fid, fi_addr_t *fi_addr,
 	return ofi_ip_av_remove(av_fid, fi_addr, count, flags);
 }
 
+struct rxm_await_conn_entry {
+	struct rxm_cmap_handle *handle;
+	struct dlist_entry list_entry;
+};
+
+void rxm_av_await_conn_connected(void *handle_ctx)
+{
+	struct rxm_await_conn_entry *conn_entry =
+		(struct rxm_await_conn_entry *) handle_ctx;
+
+	dlist_remove(&conn_entry->list_entry);
+	free(conn_entry);
+}
+
 static int
 rxm_av_insert_cmap(struct fid_av *av_fid, const void *addr, size_t count,
 		   fi_addr_t *fi_addr, uint64_t flags)
@@ -74,6 +88,7 @@ rxm_av_insert_cmap(struct fid_av *av_fid, const void *addr, size_t count,
 	size_t i;
 	int ret = 0;
 	const void *cur_addr;
+	struct dlist_entry await_conn_list = DLIST_INIT(&await_conn_list);
 
 	dlist_foreach_container(&av->ep_list, struct rxm_ep,
 				rxm_ep, util_ep.av_entry) {
@@ -93,13 +108,55 @@ rxm_av_insert_cmap(struct fid_av *av_fid, const void *addr, size_t count,
 			if (rxm_static_connect) {
 				struct rxm_cmap_handle *handle;
 				struct rxm_cmap *cmap = rxm_ep->cmap;
+				struct rxm_await_conn_entry *await_conn_ent;
+
 				cmap->acquire(&(cmap->lock));
 				handle = rxm_cmap_acquire_handle(cmap, fi_addr_tmp);
-				(void) rxm_cmap_handle_connect(cmap, fi_addr_tmp, handle);
+				assert(handle);
+
+				await_conn_ent = calloc(1, sizeof(*await_conn_ent));
+				if (!await_conn_ent) {
+					cmap->release(&(cmap->lock));
+					FI_WARN(&rxm_prov, FI_LOG_AV,
+						"Unable to allocate memory\n");
+					return -FI_ENOMEM;
+				}
+
+				ret = rxm_cmap_handle_connect(cmap, fi_addr_tmp,
+							      handle, rxm_av_await_conn_connected,
+							      await_conn_ent);
+				if (!ret) {
+					/* Connection has already been established */
+					free(await_conn_ent);
+					cmap->release(&(cmap->lock));
+					continue;
+				} else if (ret != -FI_EAGAIN) {
+					cmap->release(&(cmap->lock));
+					FI_WARN(&rxm_prov, FI_LOG_AV,
+						"Unable to establish a connection (error - %d)\n",
+						ret);
+					return ret;
+				}
+
+				dlist_insert_tail(&await_conn_ent->list_entry,
+						  &await_conn_list);
 				cmap->release(&(cmap->lock));
 			}
 		}
+
+		if (rxm_static_connect) {
+			while (!dlist_empty(&await_conn_list)) {
+				ret = slistfd_wait_avail(&rxm_ep->msg_eq_entry_list, -1);
+				if (ret == 1) {
+					ret = rxm_conn_process_eq_events(rxm_ep);
+					if (ret) {
+						return ret;
+					}
+				}
+			}
+		}
 	}
+
 	return 0;
 }
 

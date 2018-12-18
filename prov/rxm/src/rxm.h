@@ -180,6 +180,9 @@ enum rxm_cmap_reject_flag {
 	RXM_CMAP_REJECT_SIMULT_CONN,
 };
 
+struct rxm_cmap_handle;
+typedef void (*rxm_cmap_handle_connected_cb)(void *handle_ctx);
+
 struct rxm_cmap_handle {
 	struct rxm_cmap *cmap;
 	enum rxm_cmap_state state;
@@ -191,6 +194,9 @@ struct rxm_cmap_handle {
 	uint64_t remote_key;
 	fi_addr_t fi_addr;
 	struct rxm_cmap_peer *peer;
+
+	rxm_cmap_handle_connected_cb connected_cb;
+	void *handle_ctx;
 };
 
 struct rxm_cmap_peer {
@@ -253,7 +259,9 @@ void rxm_cmap_del_handle_ts(struct rxm_cmap_handle *handle);
 void rxm_cmap_free(struct rxm_cmap *cmap);
 int rxm_cmap_alloc(struct rxm_ep *rxm_ep, struct rxm_cmap_attr *attr);
 int rxm_cmap_handle_connect(struct rxm_cmap *cmap, fi_addr_t fi_addr,
-			    struct rxm_cmap_handle *handle);
+			    struct rxm_cmap_handle *handle,
+			    rxm_cmap_handle_connected_cb connected_cb,
+			    void *handle_ctx);
 /* Caller must hold cmap->lock */
 int rxm_cmap_move_handle_to_peer_list(struct rxm_cmap *cmap, int index);
 
