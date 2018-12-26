@@ -51,21 +51,21 @@ static int mlx_cm_getname_mlx_format(
 	if (status != UCS_OK) {
 		FI_WARN( &mlx_prov, FI_LOG_CORE,
 			"ucp_worker_get_address error!!!\n");
-		return MLX_TRANSLATE_ERRCODE(status);
+		return MLX_UCS_2_OFI(status);
 	}
 
-	if (addr_len_local > FI_MLX_MAX_NAME_LEN) {
+	if (addr_len_local > MLX_MAX_NAME_LEN) {
 		FI_WARN( &mlx_prov, FI_LOG_CORE,
 			"Address returned by UCX is too long %"PRIu64"\n",
 			 addr_len_local);
 		return -FI_EINVAL;
 	}
 
-	if ((*addrlen) < FI_MLX_MAX_NAME_LEN) {
+	if ((*addrlen) < MLX_MAX_NAME_LEN) {
 		FI_WARN( &mlx_prov, FI_LOG_CORE,
 			"Buffer storage for ep address is too small %"PRIu64
 			" instead of %d [%s]\n",
-			*addrlen, FI_MLX_MAX_NAME_LEN, (char *)addr_local);
+			*addrlen, MLX_MAX_NAME_LEN, (char *)addr_local);
 		ofi_status = -FI_ETOOSMALL;
 	}
 	FI_INFO(&mlx_prov, FI_LOG_CORE, 
@@ -76,7 +76,7 @@ static int mlx_cm_getname_mlx_format(
 		memcpy(addr, addr_local, (((*addrlen) < addr_len_local) ?
 					  (*addrlen) : addr_len_local));
 
-	*addrlen = FI_MLX_MAX_NAME_LEN;
+	*addrlen = MLX_MAX_NAME_LEN;
 	ucp_worker_release_address(
 				ep->worker,
 				(ucp_address_t *)addr_local);

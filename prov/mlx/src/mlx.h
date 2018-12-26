@@ -40,6 +40,7 @@ extern "C" {
 
 #include "config.h"
 #include <ucp/api/ucp.h>
+#include <uct/api/uct.h>
 #include <ucm/api/ucm.h>
 
 #include <errno.h>
@@ -70,27 +71,25 @@ extern "C" {
 #include <sys/socket.h>
 #include <ifaddrs.h>
 
-#define FI_MLX_FABRIC_NAME "mlx"
-#define FI_MLX_DEFAULT_INJECT_SIZE 1024
-#define FI_MLX_DEFAULT_NS_PORT 12345
-#define FI_MLX_DEF_CQ_SIZE (1024)
-#define FI_MLX_DEF_MR_CNT (1 << 16)
+#define MLX_DEFAULT_NS_PORT 12345
 
-#define FI_MLX_VERSION_MINOR 5
-#define FI_MLX_VERSION_MAJOR 1
-#define FI_MLX_VERSION (FI_VERSION(FI_MLX_VERSION_MAJOR, FI_MLX_VERSION_MINOR))
+#define MLX_VERSION_MINOR 5
+#define MLX_VERSION_MAJOR 1
+#define MLX_VERSION (FI_VERSION(MLX_VERSION_MAJOR, MLX_VERSION_MINOR))
 
-#define FI_MLX_RKEY_MAX_LEN (256)
+#define MLX_MAX_NAME_LEN (1024)
 
-#define FI_MLX_MAX_NAME_LEN (1024)
+#define MLX_ANY_SERVICE (0)
 
-#define FI_MLX_CAPS (FI_SEND | FI_RECV | FI_TAGGED)
-#define FI_MLX_MODE_REQUIRED (0ULL)
-#define FI_MLX_MODE_SUPPORTED (FI_CONTEXT | FI_ASYNC_IOV)
-#define FI_MLX_OP_FLAGS (FI_SEND | FI_RECV)
-#define FI_MLX_ANY_SERVICE (0)
-struct mlx_global_descriptor{
-	ucp_config_t *config;
+#define MLX_MSG_ORDER (FI_ORDER_RAR | FI_ORDER_RAW | FI_ORDER_RAS |	\
+		       FI_ORDER_WAW | FI_ORDER_WAS | FI_ORDER_SAW |	\
+		       FI_ORDER_SAS)
+
+#define MLX_CAPS (FI_MSG | FI_SEND | FI_RECV | FI_LOCAL_COMM | FI_REMOTE_COMM)
+
+#define MLX_UCS_2_OFI(ucs_err)	mlx_errcode_translation_table[(-ucs_err) + 1]
+
+struct mlx_global_descriptor {
 	int use_ns;
 	int ns_port;
 	struct util_ns name_serv;
@@ -152,7 +151,7 @@ struct mlx_request {
 OFI_DECLARE_CIRQUE(struct fi_cq_tagged_entry, mlx_comp_cirq);
 
 extern int mlx_errcode_translation_table[];
-#define MLX_TRANSLATE_ERRCODE(X) mlx_errcode_translation_table[(-X)+1]
+extern struct util_prov mlx_util_prov;
 extern struct fi_provider mlx_prov;
 extern struct mlx_global_descriptor mlx_descriptor;
 extern struct util_prov mlx_util_prov;
@@ -160,7 +159,7 @@ extern struct util_prov mlx_util_prov;
 extern struct fi_ops_cm mlx_cm_ops;
 extern struct fi_ops_tagged mlx_tagged_ops;
 extern struct fi_ops_mr mlx_mr_ops;
-extern struct fi_fabric_attr mlx_fabric_attrs;
+extern const struct fi_fabric_attr mlx_fabric_attr;
 
 int mlx_fabric_open(
 		struct fi_fabric_attr *attr,

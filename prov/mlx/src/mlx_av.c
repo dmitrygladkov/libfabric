@@ -140,15 +140,15 @@ static int mlx_av_insert(
 				break;
 		} else {
 			ep_params.address = (const ucp_address_t *)
-				(&(((const char *)addr)[i * FI_MLX_MAX_NAME_LEN]));
+				(&(((const char *)addr)[i * MLX_MAX_NAME_LEN]));
 		}
 
 		ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
 		FI_WARN( &mlx_prov, FI_LOG_CORE,
 			"Try to insert address #%d, offset=%d (size=%ld)"
 			" fi_addr=%p \naddr = %s\n",
-			i, i * FI_MLX_MAX_NAME_LEN, count,
-			fi_addr, &(((const char *)addr)[i * FI_MLX_MAX_NAME_LEN]));
+			i, i * MLX_MAX_NAME_LEN, count,
+			fi_addr, &(((const char *)addr)[i * MLX_MAX_NAME_LEN]));
 
 		status = ucp_ep_create( ep->worker,
 					&ep_params,
@@ -162,7 +162,7 @@ static int mlx_av_insert(
 		} else {
 			if (av->eq) {
 				mlx_av_write_event( av, i,
-					MLX_TRANSLATE_ERRCODE(status),
+					MLX_UCS_2_OFI(status),
 					context);
 			}
 			break;
@@ -257,7 +257,7 @@ int mlx_av_open(
 	if (mlx_descriptor.use_ns) {
 		av->addr_len = sizeof(struct sockaddr_in);
 	} else {
-		av->addr_len = FI_MLX_MAX_NAME_LEN;
+		av->addr_len = MLX_MAX_NAME_LEN;
 	}
 
 	av->count = count;

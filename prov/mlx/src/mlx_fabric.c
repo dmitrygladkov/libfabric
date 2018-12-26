@@ -64,8 +64,8 @@ static struct fi_ops_fabric mlx_fabric_ops = {
 int mlx_ns_service_cmp(void *svc1, void *svc2)
 {
 	int service1 = *(int *)svc1, service2 = *(int *)svc2;
-	if (service1 == FI_MLX_ANY_SERVICE ||
-	    service2 == FI_MLX_ANY_SERVICE)
+	if (service1 == MLX_ANY_SERVICE ||
+	    service2 == MLX_ANY_SERVICE)
 		return 0;
 	return (service1 < service2) ?
 		-1 : (service1 > service2);
@@ -73,7 +73,7 @@ int mlx_ns_service_cmp(void *svc1, void *svc2)
 
 int mlx_ns_is_service_wildcard(void *svc)
 {
-	return (*(int *)svc == FI_MLX_ANY_SERVICE);
+	return (*(int *)svc == MLX_ANY_SERVICE);
 }
 
 #define MLX_IGNORED_LO_ADDR "127.0.0.1"
@@ -151,7 +151,7 @@ int mlx_ns_start ()
 
 	mlx_descriptor.name_serv.hostname = mlx_descriptor.localhost;
 	mlx_descriptor.name_serv.port = (int) mlx_descriptor.ns_port;
-	mlx_descriptor.name_serv.name_len = FI_MLX_MAX_NAME_LEN;
+	mlx_descriptor.name_serv.name_len = MLX_MAX_NAME_LEN;
 	mlx_descriptor.name_serv.service_len = sizeof(short);
 	mlx_descriptor.name_serv.service_cmp = mlx_ns_service_cmp;
 	mlx_descriptor.name_serv.is_service_wildcard = mlx_ns_is_service_wildcard;
@@ -172,15 +172,12 @@ int mlx_fabric_open(
 
 	FI_INFO( &mlx_prov, FI_LOG_CORE, "\n" );
 
-	if (strcmp(attr->name, FI_MLX_FABRIC_NAME))
-		return -FI_ENODATA;
-
 	fabric_priv = calloc(1, sizeof(struct mlx_fabric));
 	if (!fabric_priv) {
 		return -FI_ENOMEM;
 	}
 
-	status = ofi_fabric_init(&mlx_prov, &mlx_fabric_attrs, attr,
+	status = ofi_fabric_init(&mlx_prov, &mlx_fabric_attr, attr,
 			 &(fabric_priv->u_fabric), context);
 	if (status) {
 		FI_INFO( &mlx_prov, FI_LOG_CORE,

@@ -71,7 +71,7 @@ void mlx_send_callback(void *request,
 
 		err->comp = (mlx_req->completion.error);
 		err->comp.prov_errno = (int)status;
-		err->comp.err = MLX_TRANSLATE_ERRCODE(status);
+		err->comp.err = MLX_UCS_2_OFI(status);
 		err->comp.olen = 0;
 		slist_insert_tail(&err->list_entry, &cq->oflow_err_list);
 	}
@@ -109,7 +109,7 @@ void mlx_recv_callback(void *request,
 
 	if (status != UCS_OK) {
 		mlx_req->completion.error.prov_errno = (int)status;
-		mlx_req->completion.error.err = MLX_TRANSLATE_ERRCODE(status);
+		mlx_req->completion.error.err = MLX_UCS_2_OFI(status);
 	}
 
 	fastlock_acquire(&cq->cq_lock);

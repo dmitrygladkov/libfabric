@@ -66,7 +66,7 @@ static ssize_t mlx_tagged_recvmsg(
 		FI_DBG( &mlx_prov,FI_LOG_CORE,
 			"Send operation returns error: %s",
 			ucs_status_string(*(ucs_status_t*)status));
-		return MLX_TRANSLATE_ERRCODE(*(ucs_status_t*)status);
+		return MLX_UCS_2_OFI(*(ucs_status_t*)status);
 	}
 
 	req = (struct mlx_request *)status;
@@ -121,7 +121,7 @@ fence:
 		ucs_status_t cstatus;
 		cstatus = ucp_worker_flush(u_ep->worker);
 		if (status != UCS_OK)
-			return MLX_TRANSLATE_ERRCODE(cstatus);
+			return MLX_UCS_2_OFI(cstatus);
 	}
 	return FI_SUCCESS;
 }
@@ -174,7 +174,7 @@ static ssize_t mlx_tagged_sendmsg(
 		FI_DBG( &mlx_prov,FI_LOG_CORE,
 			"Send operation returns error: %s",
 			ucs_status_string(*(ucs_status_t*)status));
-		return MLX_TRANSLATE_ERRCODE(*(ucs_status_t*)status);
+		return MLX_UCS_2_OFI(*(ucs_status_t*)status);
 	}
 
 	if ((flags & FI_INJECT) && (UCS_PTR_STATUS(status) == UCS_OK)) {
@@ -224,7 +224,7 @@ fence:
 	if(flags & FI_FENCE) {
 		cstatus = ucp_worker_flush(u_ep->worker);
 		if(status != UCS_OK) {
-			return MLX_TRANSLATE_ERRCODE(cstatus);
+			return MLX_UCS_2_OFI(cstatus);
 		}
 	}
 	return FI_SUCCESS;
@@ -253,7 +253,7 @@ static ssize_t mlx_tagged_inject(
 		FI_DBG( &mlx_prov,FI_LOG_CORE,
 			"Send operation returns error: %s",
 			ucs_status_string(*(ucs_status_t*)status));
-		return MLX_TRANSLATE_ERRCODE(*(ucs_status_t*)status);
+		return MLX_UCS_2_OFI(*(ucs_status_t*)status);
 	}
 
 	/* `info` is left unitialized, because this is send operation */
