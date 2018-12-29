@@ -1316,6 +1316,7 @@ static int fi_ibv_resolve_ib_ud_dest_addr(const char *node, const char *service,
 {
 	int svc = VERBS_IB_UD_NS_ANY_SERVICE;
 	struct util_ns ns = {
+		.prov = &fi_ibv_prov,
 		.port = fi_ibv_gl_data.dgram.name_server_port,
 		.name_len = sizeof(**dest_addr),
 		.service_len = sizeof(svc),

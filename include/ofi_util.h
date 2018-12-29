@@ -884,11 +884,15 @@ typedef int(*ofi_ns_service_cmp_func_t)(void *svc1, void *svc2);
 typedef int(*ofi_ns_is_service_wildcard_func_t)(void *svc);
 
 struct util_ns {
+	const struct fi_provider *prov;
+
 	SOCKET		listen_sock;
 	pthread_t	thread;
 	RbtHandle	map;
 
+	char		*iface_env;
 	char		*hostname;
+	int		hostname_allocated;
 	int		port;
 
 	size_t		name_len;

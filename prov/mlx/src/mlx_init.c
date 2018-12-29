@@ -38,7 +38,6 @@ struct mlx_global_descriptor mlx_descriptor = {
 	.config = NULL,
 	.use_ns = 0,
 	.ns_port = FI_MLX_DEFAULT_NS_PORT,
-	.localhost = NULL,
 };
 
 static int mlx_init_errcodes()

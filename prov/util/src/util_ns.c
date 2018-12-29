@@ -41,9 +41,21 @@
  * a query to the name server residing on "node".
  */
 
+#include "config.h"
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+
+#if HAVE_GETIFADDRS
+#include <net/if.h>
+#include <ifaddrs.h>
+#endif
+
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#include <ofi_osd.h>
 
 #include <ofi_util.h>
 #include <rdma/providers/fi_log.h>
@@ -69,6 +81,12 @@ struct util_ns_cmd {
 	uint8_t		op;
 	uint16_t	reserved; /* TODO: this should be the msg len */
 	uint32_t	status;
+};
+
+struct util_ns_addr {
+	struct slist_entry entry;
+	char *if_name;
+	union ofi_sock_ip if_addr;
 };
 
 const size_t cmd_len = sizeof(struct util_ns_cmd);
@@ -223,7 +241,7 @@ static int util_ns_process_cmd(struct util_ns *ns, struct util_ns_cmd *cmd,
 	free(io_buf);
 
 out:
-	FI_INFO(&core_prov, FI_LOG_CORE,
+	FI_INFO(ns->prov, FI_LOG_CORE,
 		"Name server processed command - returned %d (%s)\n", ret, fi_strerror(-ret));
 	return ret;
 }
@@ -366,7 +384,7 @@ int ofi_ns_add_local_name(struct util_ns *ns, void *service, void *name)
 	};
 
 	if (!ns->is_initialized) {
-		FI_WARN(&core_prov, FI_LOG_CORE,
+		FI_WARN(ns->prov, FI_LOG_CORE,
 			"Cannot add local name - name server uninitialized\n");
 		return -FI_EINVAL;
 	}
@@ -551,7 +569,7 @@ err3:
 err2:
 	rbtDelete(ns->map);
 err1:
-	FI_WARN(&core_prov, FI_LOG_CORE, "Error starting name server\n");
+	FI_WARN(ns->prov, FI_LOG_CORE, "Error starting name server\n");
 	ofi_atomic_dec32(&ns->ref);
 	return ret;
 }
@@ -577,17 +595,142 @@ void ofi_ns_stop_server(struct util_ns *ns)
 	rbtDelete(ns->map);
 }
 
+#if HAVE_GETIFADDRS
+static struct slist *ofi_ns_get_addr_list(struct util_ns *ns)
+{
+	int ret;
+	struct util_ns_addr *ns_addr;
+	struct ifaddrs *ifaddrs, *ifa;
+	struct slist *ns_list = calloc(1, sizeof(*ns_list));
+
+	if (!ns_list)
+		return NULL;
+
+	slist_init(ns_list);
+
+	ret = ofi_getifaddrs(&ifaddrs);
+	if (ret) {
+		free(ns_list);
+		return NULL;
+	}
+
+	for (ifa = ifaddrs; ifa != NULL; ifa = ifa->ifa_next) {
+		if (ifa->ifa_addr == NULL || !(ifa->ifa_flags & IFF_UP) ||
+		    (ifa->ifa_flags & IFF_LOOPBACK) ||
+		    ((ifa->ifa_addr->sa_family != AF_INET) &&
+		     (ifa->ifa_addr->sa_family != AF_INET6)))
+			continue;
+
+		ns_addr = calloc(1, sizeof(*ns_addr));
+		if (!ns_addr)
+			continue;
+
+		memcpy(&ns_addr->if_addr, ifa->ifa_addr,
+		       ofi_sizeofaddr(ifa->ifa_addr));
+		ns_addr->if_name = strdup(ifa->ifa_name);
+		if (!ns_addr->if_name) {
+			free(ns_addr);
+			continue;
+		}
+
+		ofi_straddr_log(ns->prov, FI_LOG_INFO, FI_LOG_CORE,
+				"Name Server available addr: ",
+				ifa->ifa_addr);
+
+		slist_insert_tail(&ns_addr->entry, ns_list);
+	}
+
+	freeifaddrs(ifaddrs);
+
+	return ns_list;
+}
+#else /* !HAVE_GETIFADDRS */
+static struct slist *ofi_ns_get_addr_list(struct util_ns *ns)
+{
+	/* If this is needed for Windows, add implementation
+	 * using HAVE_MIB_IPADDRTABLE */
+	return NULL;
+}
+#endif /* HAVE_GETIFADDRS */
+
+void ofi_ns_release_addr_list(struct slist *ns_list)
+{
+	struct util_ns_addr *ns_addr;
+
+	while (!slist_empty(ns_list)) {
+		slist_remove_head_container(ns_list, struct util_ns_addr,
+					    ns_addr, entry);
+		free(ns_addr->if_name);
+		free(ns_addr);
+	}
+
+	free(ns_list);
+}
+
+static char *ofi_ns_resolve_localhost(struct util_ns *ns)
+{
+	char *iface = NULL, *result = NULL, host[NI_MAXHOST];
+	struct slist *ns_list;
+	struct slist_entry *list_entry, *prev_entry;
+	struct util_ns_addr *ns_addr;
+
+	if (ns->iface_env) {
+		(void) fi_param_get_str((struct fi_provider *)ns->prov,
+					ns->iface_env, &iface);
+	}
+
+	ns_list = ofi_ns_get_addr_list(ns);
+	if (!ns_list || slist_empty(ns_list))
+		return NULL;
+
+	OFI_UNUSED(prev_entry);
+
+	slist_foreach(ns_list, list_entry, prev_entry) {
+		ns_addr = container_of(list_entry, struct util_ns_addr, entry);
+
+		if (iface && strncmp(iface, ns_addr->if_name, strlen(iface)) != 0) {
+			FI_DBG(ns->prov, FI_LOG_CORE,
+			       "Skip (%s) interface for NS\n", ns_addr->if_name);
+			continue;
+		}
+
+		if (getnameinfo(&ns_addr->if_addr.sa, ofi_sizeofaddr(&ns_addr->if_addr.sa),
+				host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) != 0) {
+			FI_WARN(ns->prov, FI_LOG_CORE,
+				"getnameinfo() fails for %s iface with status %d \n",
+				ns_addr->if_name, ofi_syserr());
+			host[0] = '\0';
+			continue;
+		}
+
+		result = strdup(host);
+		break;
+	}
+
+	ofi_ns_release_addr_list(ns_list);
+
+	return result;
+}
+
 /* TODO: This isn't thread safe -- neither are start/stop */
 void ofi_ns_init(struct util_ns *ns)
 {
-	assert(ns && ns->name_len && ns->service_len && ns->service_cmp);
+	assert(ns && ns->name_len && ns->service_len &&
+	       ns->service_cmp && ns->prov);
 
 	if (ns->is_initialized)
 		return;
 
 	ofi_atomic_initialize32(&ns->ref, 0);
 	ns->listen_sock = INVALID_SOCKET;
-	if (!ns->hostname)
-		ns->hostname = OFI_NS_DEFAULT_HOSTNAME;
+
+	if (!ns->hostname) {
+		ns->hostname = ofi_ns_resolve_localhost(ns);
+		if (!ns->hostname)
+			ns->hostname = OFI_NS_DEFAULT_HOSTNAME;
+		else
+			ns->hostname_allocated = 1;
+	}
+
 	ns->is_initialized = 1;
 }

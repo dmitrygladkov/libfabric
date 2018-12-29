@@ -102,7 +102,7 @@ static int mlx_cm_getname_ai_format(
 		}
 		*addrlen = ep->addr_len;
 	} else {
-		char *hostname = mlx_descriptor.localhost;
+		char *hostname = mlx_descriptor.name_serv.hostname;
 		int service = (((getpid() & 0xFFFF)));
 		struct addrinfo hints = {
 			.ai_family = AF_INET,

@@ -485,6 +485,7 @@ static int psmx2_getinfo(uint32_t api_version, const char *node,
 
 		psmx2_get_uuid(uuid);
 		struct util_ns ns = {
+			.prov = &psmx2_prov,
 			.port = psmx2_uuid_to_port(uuid),
 			.name_len = sizeof(*dest_addr),
 			.service_len = sizeof(svc),

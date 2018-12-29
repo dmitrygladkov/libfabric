@@ -94,7 +94,6 @@ struct mlx_global_descriptor{
 	int use_ns;
 	int ns_port;
 	struct util_ns name_serv;
-	char *localhost;
 };
 
 struct mlx_fabric {

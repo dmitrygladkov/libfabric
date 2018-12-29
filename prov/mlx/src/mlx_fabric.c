@@ -36,8 +36,17 @@ int mlx_fabric_close(struct fid *fid)
 {
 	int status;
 
-	if (mlx_descriptor.use_ns)
-		ofi_ns_stop_server (&mlx_descriptor.name_serv);
+	if (mlx_descriptor.use_ns) {
+		ofi_ns_stop_server(&mlx_descriptor.name_serv);
+
+		if (mlx_descriptor.name_serv.hostname_allocated) {
+			free(mlx_descriptor.name_serv.hostname);
+			mlx_descriptor.name_serv.hostname = NULL;
+			mlx_descriptor.name_serv.hostname_allocated = 0;
+		}
+		mlx_descriptor.name_serv.is_initialized = 0;
+		free(mlx_descriptor.name_serv.iface_env);
+	}
 
 	status = ofi_fabric_close(
 			container_of(fid, struct util_fabric, fabric_fid.fid));
@@ -76,80 +85,10 @@ int mlx_ns_is_service_wildcard(void *svc)
 	return (*(int *)svc == FI_MLX_ANY_SERVICE);
 }
 
-#define MLX_IGNORED_LO_ADDR "127.0.0.1"
-static char* mlx_local_host_resolve()
+int mlx_ns_start(void)
 {
-	int status;
-	struct ifaddrs *ifaddr, *ifa;
-	char host[NI_MAXHOST];
-	char *iface = NULL;
-	char *result = NULL;
-
-	status = fi_param_get( &mlx_prov, "ns_iface",
-		&iface);
-	if (!status) {
-		iface = NULL;
-	}
-
-	if (-1 == getifaddrs(&ifaddr)) {
-		FI_WARN( &mlx_prov, FI_LOG_CORE,
-			"Unable to resolve local host address");
-		return NULL;
-	}
-
-	for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-		/*Ignore not IPv$ ifaces*/
-		if ((ifa->ifa_addr == NULL) ||
-				(ifa->ifa_addr->sa_family != AF_INET)) {
-			continue;
-		}
-
-		if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
-				host, NI_MAXHOST,
-				NULL, 0, NI_NUMERICHOST) != 0) {
-			host[0] = '\0';
-			continue;
-		}
-
-		/*Skip loopback device*/
-		if (strncmp(host, MLX_IGNORED_LO_ADDR,
-				strlen(MLX_IGNORED_LO_ADDR))==0) {
-			host[0] = '\0';
-			continue;
-		}
-
-		/* If iface name is specified */
-		if (iface && strcmp(iface, ifa->ifa_name)!=0) {
-			host[0] = '\0';
-			continue;
-		}
-
-		result = strdup(host);
-		break;
-	}
-	if (result == NULL) {
-		FI_WARN( &mlx_prov, FI_LOG_CORE,
-			"No IPv4-compatible interface was found. (match mask:%s)",
-			iface?iface:"*");
-	}
-	freeifaddrs(ifaddr);
-	return result;
-}
-
-int mlx_ns_start ()
-{
-	if (!mlx_descriptor.localhost)
-		mlx_descriptor.localhost = mlx_local_host_resolve();
-
-	if (!mlx_descriptor.localhost) {
-		FI_INFO(&mlx_prov, FI_LOG_CORE,
-			"Unable to resolve local host address:\n"
-			"\t - unable to start NS\n"
-			"\t - Please try MLX-address format");
-		return -FI_EINVAL;
-	}
-
-	mlx_descriptor.name_serv.hostname = mlx_descriptor.localhost;
+	mlx_descriptor.name_serv.prov = &mlx_prov;
+	mlx_descriptor.name_serv.iface_env = strdup("ns_iface");
 	mlx_descriptor.name_serv.port = (int) mlx_descriptor.ns_port;
 	mlx_descriptor.name_serv.name_len = FI_MLX_MAX_NAME_LEN;
 	mlx_descriptor.name_serv.service_len = sizeof(short);
