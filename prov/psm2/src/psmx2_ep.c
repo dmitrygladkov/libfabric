@@ -52,37 +52,61 @@ static void psmx2_ep_optimize_ops(struct psmx2_fid_ep *ep)
 
 			if (ep->caps & FI_DIRECTED_RECV) {
 				if (!send_completion && !recv_completion) {
-					ep->ep.tagged = &psmx2_tagged_ops_no_event_directed;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_event_av_table_directed;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_event_av_map_directed;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0 and event suppression and directed receive\n");
 				} else if (!send_completion) {
-					ep->ep.tagged = &psmx2_tagged_ops_no_send_event_directed;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_send_event_av_table_directed;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_send_event_av_map_directed;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0 and send event suppression and directed receive\n");
 				} else if (!recv_completion) {
-					ep->ep.tagged = &psmx2_tagged_ops_no_recv_event_directed;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_recv_event_av_table_directed;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_recv_event_av_map_directed;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0 and recv event suppression and directed receive\n");
 				} else {
-					ep->ep.tagged = &psmx2_tagged_ops_no_flag_directed;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_flag_av_table_directed;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_flag_av_map_directed;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0 and directed receive\n");
 				}
 			} else {
 				if (!send_completion && !recv_completion) {
-					ep->ep.tagged = &psmx2_tagged_ops_no_event_undirected;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_event_av_table_undirected;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_event_av_map_undirected;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0 and event suppression\n");
 				} else if (!send_completion) {
-					ep->ep.tagged = &psmx2_tagged_ops_no_send_event_undirected;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_send_event_av_table_undirected;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_send_event_av_map_undirected;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0 and send event suppression\n");
 				} else if (!recv_completion) {
-					ep->ep.tagged = &psmx2_tagged_ops_no_recv_event_undirected;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_recv_event_av_table_undirected;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_recv_event_av_map_undirected;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0 and recv event suppression\n");
 				} else {
-					ep->ep.tagged = &psmx2_tagged_ops_no_flag_undirected;
+					if (ep->av && ep->av->type == FI_AV_TABLE)
+						ep->ep.tagged = &psmx2_tagged_ops_no_flag_av_table_undirected;
+					else
+						ep->ep.tagged = &psmx2_tagged_ops_no_flag_av_map_undirected;
 					FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
 						"tagged ops optimized for op_flags=0\n");
 				}
@@ -254,7 +278,6 @@ static int psmx2_add_poll_ctxt(struct slist *list, struct psmx2_trx_ctxt *trx_ct
 	if (!item)
 		return -FI_ENOMEM;
 
-	ofi_atomic_inc32(&trx_ctxt->poll_refcnt);
 	item->trx_ctxt = trx_ctxt;
 	slist_insert_tail(&item->list_entry, list);
 	return 0;
@@ -338,9 +361,9 @@ STATIC int psmx2_ep_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 		ep->av = av;
 		psmx2_ep_optimize_ops(ep);
 		if (ep->tx)
-			psmx2_av_add_trx_ctxt(av, ep->tx);
+			psmx2_av_add_trx_ctxt(av, ep->tx, !psmx2_env.lazy_conn);
 		if (ep->rx && ep->rx != ep->tx)
-			psmx2_av_add_trx_ctxt(av, ep->rx);
+			psmx2_av_add_trx_ctxt(av, ep->rx, !psmx2_env.lazy_conn);
 		break;
 
 	case FI_CLASS_MR:

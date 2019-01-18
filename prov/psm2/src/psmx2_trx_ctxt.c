@@ -176,9 +176,6 @@ void psmx2_trx_ctxt_free(struct psmx2_trx_ctxt *trx_ctxt, int usage_flags)
 	FI_INFO(&psmx2_prov, FI_LOG_CORE, "epid: %016lx (%s)\n",
 		trx_ctxt->psm2_epid, psmx2_usage_flags_to_string(old_flags));
 
-	trx_ctxt->am_progress = 0;
-	trx_ctxt->poll_active = 0;
-
 	trx_ctxt->domain->trx_ctxt_lock_fn(&trx_ctxt->domain->trx_ctxt_lock, 1);
 	dlist_remove(&trx_ctxt->entry);
 	trx_ctxt->domain->trx_ctxt_unlock_fn(&trx_ctxt->domain->trx_ctxt_lock, 1);
@@ -216,9 +213,7 @@ void psmx2_trx_ctxt_free(struct psmx2_trx_ctxt *trx_ctxt, int usage_flags)
 	fastlock_destroy(&trx_ctxt->am_req_pool_lock);
 	fastlock_destroy(&trx_ctxt->poll_lock);
 	fastlock_destroy(&trx_ctxt->peer_lock);
-
-	if (!ofi_atomic_dec32(&trx_ctxt->poll_refcnt))
-		free(trx_ctxt);
+	free(trx_ctxt);
 }
 
 struct psmx2_trx_ctxt *psmx2_trx_ctxt_alloc(struct psmx2_fid_domain *domain,
@@ -341,8 +336,6 @@ struct psmx2_trx_ctxt *psmx2_trx_ctxt_alloc(struct psmx2_fid_domain *domain,
 	trx_ctxt->id = psmx2_trx_ctxt_cnt++;
 	trx_ctxt->domain = domain;
 	trx_ctxt->usage_flags = asked_flags;
-	trx_ctxt->poll_active = 1;
-	ofi_atomic_initialize32(&trx_ctxt->poll_refcnt, 1); /* take one ref for domain->trx_ctxt_list */
 
 	domain->trx_ctxt_lock_fn(&domain->trx_ctxt_lock, 1);
 	dlist_insert_before(&trx_ctxt->entry, &domain->trx_ctxt_list);

@@ -44,6 +44,7 @@ ssize_t psmx2_recv_generic(struct fid_ep *ep, void *buf, size_t len,
 	psm2_mq_tag_t psm2_tag, psm2_tagsel;
 	struct fi_context *fi_context;
 	int recv_flag = 0;
+	size_t idx;
 	int err;
 	int enable_completion;
 
@@ -55,8 +56,17 @@ ssize_t psmx2_recv_generic(struct fid_ep *ep, void *buf, size_t len,
 
 	if ((ep_priv->caps & FI_DIRECTED_RECV) && src_addr != FI_ADDR_UNSPEC) {
 		av = ep_priv->av;
-		assert(av);
-		psm2_epaddr = psmx2_av_translate_addr(av, ep_priv->rx, src_addr);
+		if (av && PSMX2_SEP_ADDR_TEST(src_addr)) {
+			psm2_epaddr = psmx2_av_translate_sep(av, ep_priv->rx, src_addr);
+		} else if (av && av->type == FI_AV_TABLE) {
+			idx = (size_t)src_addr;
+			if ((err = psmx2_av_check_table_idx(av, ep_priv->rx, idx)))
+				return err;
+
+			psm2_epaddr = av->tables[ep_priv->rx->id].epaddrs[idx];
+		} else {
+			psm2_epaddr = PSMX2_ADDR_TO_EP(src_addr);
+		}
 	} else {
 		psm2_epaddr = 0;
 	}
@@ -197,6 +207,7 @@ ssize_t psmx2_send_generic(struct fid_ep *ep, const void *buf, size_t len,
 	struct fi_context * fi_context;
 	int send_flag = 0;
 	int err;
+	size_t idx;
 	int no_completion = 0;
 	struct psmx2_cq_event *event;
 	int have_data = (flags & FI_REMOTE_CQ_DATA) > 0;
@@ -208,8 +219,17 @@ ssize_t psmx2_send_generic(struct fid_ep *ep, const void *buf, size_t len,
 						context, flags, data);
 
 	av = ep_priv->av;
-	assert(av);
-	psm2_epaddr = psmx2_av_translate_addr(av, ep_priv->tx, dest_addr);
+	if (av && PSMX2_SEP_ADDR_TEST(dest_addr)) {
+		psm2_epaddr = psmx2_av_translate_sep(av, ep_priv->tx, dest_addr);
+	} else if (av && av->type == FI_AV_TABLE) {
+		idx = (size_t)dest_addr;
+		if ((err = psmx2_av_check_table_idx(av, ep_priv->tx, idx)))
+			return err;
+
+		psm2_epaddr = av->tables[ep_priv->tx->id].epaddrs[idx];
+	} else  {
+		psm2_epaddr = PSMX2_ADDR_TO_EP(dest_addr);
+	}
 
 	PSMX2_SET_TAG(psm2_tag, 0, data, PSMX2_TYPE_MSG | PSMX2_IMM_BIT_SET(have_data));
 
@@ -284,6 +304,7 @@ ssize_t psmx2_sendv_generic(struct fid_ep *ep, const struct iovec *iov,
 	struct fi_context * fi_context;
 	int send_flag = 0;
 	int err;
+	size_t idx;
 	int no_completion = 0;
 	struct psmx2_cq_event *event;
 	size_t real_count;
@@ -319,6 +340,8 @@ ssize_t psmx2_sendv_generic(struct fid_ep *ep, const struct iovec *iov,
 	if (!req)
 		return -FI_ENOMEM;
 
+	PSMX2_STATUS_INIT(req->status);
+
 	if (total_len <= PSMX2_IOV_BUF_SIZE) {
 		req->iov_protocol = PSMX2_IOV_PROTO_PACK;
 		p = req->buf;
@@ -350,8 +373,19 @@ ssize_t psmx2_sendv_generic(struct fid_ep *ep, const struct iovec *iov,
 	}
 
 	av = ep_priv->av;
-	assert(av);
-	psm2_epaddr = psmx2_av_translate_addr(av, ep_priv->tx, dest_addr);
+	if (av && PSMX2_SEP_ADDR_TEST(dest_addr)) {
+		psm2_epaddr = psmx2_av_translate_sep(av, ep_priv->tx, dest_addr);
+	} else if (av && av->type == FI_AV_TABLE) {
+		idx = (size_t)dest_addr;
+		if ((err = psmx2_av_check_table_idx(av, ep_priv->tx, idx))) {
+			free(req);
+			return err;
+		}
+
+		psm2_epaddr = av->tables[ep_priv->tx->id].epaddrs[idx];
+	} else  {
+		psm2_epaddr = PSMX2_ADDR_TO_EP(dest_addr);
+	}
 
 	if (flags & FI_REMOTE_CQ_DATA)
 		msg_flags |= PSMX2_IMM_BIT;
