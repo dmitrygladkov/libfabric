@@ -444,28 +444,6 @@ int rxm_cmap_insert_addrs(struct rxm_cmap *cmap, const void *addr,
 	return ret;
 }
 
-/* Caller must hold cmap->lock */
-static void rxm_cmap_conn_connected(struct rxm_cmap_handle *handle,
-				    void *context,
-				    enum rxm_cmap_state prev_state,
- 				    enum rxm_cmap_state new_state)
-{
- 	struct dlist_entry *wait_conn_entry = (struct dlist_entry *) context;
- 
-  	rxm_cmap_state_unsubscribe(handle,
- 				   RXM_CMAP_ANY_STATE,
- 				   ((1 << RXM_CMAP_CONNECTED_NOTIFY) |
- 				    (1 << RXM_CMAP_CONNECTED)));
-
-  	dlist_remove(wait_conn_entry);
- 	free(wait_conn_entry);
-
-	if ((handle->cmap->av->domain->data_progress == FI_PROGRESS_AUTO) &&
-	    dlist_empty(&handle->cmap->wait_list)) {
-		fd_signal_set(&handle->cmap->signal);
-	}
-}
-
 /* Caller must hold `cmap::lock` */
 static int rxm_cmap_handle_connect(struct rxm_cmap *cmap, fi_addr_t fi_addr,
 				   struct rxm_cmap_handle *handle)
@@ -504,6 +482,28 @@ static int rxm_cmap_handle_connect(struct rxm_cmap *cmap, fi_addr_t fi_addr,
 		ret = -FI_EOPBADSTATE;
 	}
 	return ret;
+}
+
+/* Caller must hold cmap->lock */
+static void rxm_cmap_conn_connected(struct rxm_cmap_handle *handle,
+				    void *context,
+				    enum rxm_cmap_state prev_state,
+ 				    enum rxm_cmap_state new_state)
+{
+ 	struct dlist_entry *wait_conn_entry = (struct dlist_entry *) context;
+ 
+  	rxm_cmap_state_unsubscribe(handle,
+ 				   RXM_CMAP_ANY_STATE,
+ 				   ((1 << RXM_CMAP_CONNECTED_NOTIFY) |
+ 				    (1 << RXM_CMAP_CONNECTED)));
+
+  	dlist_remove(wait_conn_entry);
+ 	free(wait_conn_entry);
+
+	if ((handle->cmap->av->domain->data_progress == FI_PROGRESS_AUTO) &&
+	    dlist_empty(&handle->cmap->wait_list)) {
+		fd_signal_set(&handle->cmap->signal);
+	}
 }
 
 int rxm_cmap_insert_addrs_and_connect(struct rxm_cmap *cmap, const void *addr,
