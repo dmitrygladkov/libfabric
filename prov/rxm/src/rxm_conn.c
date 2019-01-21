@@ -457,15 +457,19 @@ static int rxm_cmap_handle_connect(struct rxm_cmap *cmap, fi_addr_t fi_addr,
 	case RXM_CMAP_CONNECTED:
 		return FI_SUCCESS;
 	case RXM_CMAP_IDLE:
-		ret = rxm_conn_connect(cmap->ep, handle,
-				       ofi_av_get_addr(cmap->av, fi_addr),
-				       cmap->av->addrlen);
-		if (ret) {
-			rxm_cmap_del_handle(handle);
-			return ret;
+		if (cmap->conn_quota > 0) {
+			ret = rxm_conn_connect(cmap->ep, handle,
+					       ofi_av_get_addr(cmap->av, fi_addr),
+					       cmap->av->addrlen);
+			if (ret) {
+				rxm_cmap_del_handle(handle);
+				return ret;
+			}
+			handle->state = RXM_CMAP_CONNREQ_SENT;
+		} else if (slist_entry_empty(&handle->wait_conn_quota_entry)) {
+			slist_insert_tail(&handle->wait_conn_quota_entry,
+					  &cmap->conn_wait_quota_list);
 		}
-
-		rxm_cmap_change_state(handle, RXM_CMAP_CONNREQ_SENT);
 
 		ret = -FI_EAGAIN;
 		// TODO sleep on event fd instead of busy polling
@@ -692,6 +696,27 @@ void rxm_cmap_process_conn_notify(struct rxm_cmap *cmap,
 	rxm_conn_connected_handler(handle);
 }
 
+static inline void rxm_cmap_progress_wait_conn_quota_queue(struct rxm_cmap *cmap)
+{
+	int ret;
+	struct rxm_cmap_handle *next_handle;
+
+	slist_remove_head_container(&cmap->conn_wait_quota_list,
+				    struct rxm_cmap_handle,
+				    next_handle, wait_conn_quota_entry);
+	if (next_handle) {
+		slist_entry_init(&next_handle->wait_conn_quota_entry);
+
+		ret = rxm_cmap_handle_connect(cmap, next_handle->fi_addr, next_handle);
+		if (ret && (ret != -FI_EAGAIN) && (ret != RXM_CMAP_SHUTDOWN)) {
+			FI_WARN(&rxm_prov, FI_LOG_EP_CTRL,
+				"Handle connect fails with %d. Try again\n", ret);
+			slist_insert_tail(&next_handle->wait_conn_quota_entry,
+					  &cmap->conn_wait_quota_list);
+		}
+	}
+}
+
 /* Caller must hold cmap->lock */
 void rxm_cmap_process_connect(struct rxm_cmap *cmap,
 			      struct rxm_cmap_handle *handle,
@@ -716,6 +741,13 @@ void rxm_cmap_process_connect(struct rxm_cmap *cmap,
 		rxm_conn->tinject_pkt->ctrl_hdr.conn_id = rxm_conn->handle.remote_key;
 		rxm_conn->tinject_data_pkt->ctrl_hdr.conn_id = rxm_conn->handle.remote_key;
 	}
+
+	assert(slist_entry_empty(&handle->wait_conn_quota_entry));
+
+	cmap->conn_quota++;
+	assert(cmap->conn_quota > 0);
+
+	rxm_cmap_progress_wait_conn_quota_queue(cmap);
 }
 
 void rxm_cmap_process_reject(struct rxm_cmap *cmap,
@@ -960,6 +992,13 @@ int rxm_cmap_alloc(struct rxm_ep *rxm_ep, struct rxm_cmap_attr *attr)
 		ret = -FI_ENOMEM;
 		goto err2;
 	}
+
+	cmap->conn_quota = RXM_CMAP_CONN_QUOTA;
+	fi_param_get_size_t(&rxm_prov, "conn_quota", &cmap->conn_quota);
+	FI_INFO(&rxm_prov, FI_LOG_EP_CTRL,
+		"RxM EP can progress %zu connections simultaneously \n",
+		cmap->conn_quota);
+	slist_init(&cmap->conn_wait_quota_list);
 
 	memset(&cmap->handles_idx, 0, sizeof(cmap->handles_idx));
 	ofi_key_idx_init(&cmap->key_idx, RXM_CMAP_IDX_BITS);
@@ -1226,6 +1265,8 @@ static struct rxm_cmap_handle *rxm_conn_alloc(struct rxm_cmap *cmap)
 
 	if (OFI_UNLIKELY(!rxm_conn))
 		return NULL;
+
+	slist_entry_init(&rxm_conn->handle.wait_conn_quota_entry);
 
 	return &rxm_conn->handle;
 }

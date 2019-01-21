@@ -159,6 +159,8 @@ extern int rxm_lazy_conn;
 
 #define RXM_CMAP_IDX_BITS OFI_IDX_INDEX_BITS
 
+#define RXM_CMAP_CONN_QUOTA	64
+
 enum rxm_cmap_signal {
 	RXM_CMAP_FREE,
 	RXM_CMAP_EXIT,
@@ -207,6 +209,8 @@ struct rxm_cmap_handle {
 	struct rxm_cmap_peer *peer;
 
 	struct rxm_cmap_state_subscr **state_subscr;
+
+	struct slist_entry wait_conn_quota_entry;
 };
 
 struct rxm_cmap_peer {
@@ -246,6 +250,9 @@ struct rxm_cmap {
 	struct dlist_entry	wait_list;
 	struct fd_signal	signal;
 	int			progress_fd;
+
+	size_t			conn_quota;
+	struct slist		conn_wait_quota_list;
 };
 
 struct rxm_ep;
