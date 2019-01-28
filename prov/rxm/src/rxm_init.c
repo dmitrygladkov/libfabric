@@ -344,11 +344,6 @@ RXM_INI
 			"protocol. Transmit data would be copied up to this size "
 			"(default: ~16k).");
 
-	fi_param_define(&rxm_prov, "comp_per_progress", FI_PARAM_INT,
-			"Defines the maximum number of MSG provider CQ entries "
-			"(default: 1) that would be read per progress "
-			"(RxM CQ read).");
-
 	fi_param_define(&rxm_prov, "sar_limit", FI_PARAM_SIZE_T,
 			"Set this environment variable to control the RxM SAR "
 			"(Segmentation And Reassembly) protocol. "

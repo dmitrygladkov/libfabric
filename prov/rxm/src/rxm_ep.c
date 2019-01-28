@@ -262,6 +262,14 @@ static inline void rxm_buf_close(void *pool_ctx, void *context)
 	}
 }
 
+static inline void rxm_buf_handle_unavail(void *pool_ctx)
+{
+	struct rxm_buf_pool *pool = (struct rxm_buf_pool *)pool_ctx;
+	struct rxm_ep *rxm_ep = pool->rxm_ep;
+
+	rxm_ep_do_progress_cq(rxm_ep);
+}
+
 static void rxm_buf_pool_destroy(struct rxm_buf_pool *pool)
 {
 	/* This indicates whether the pool is allocated or not */
@@ -282,6 +290,7 @@ static int rxm_buf_pool_create(struct rxm_ep *rxm_ep,
 		.chunk_cnt	= chunk_count,
 		.alloc_hndlr	= rxm_buf_reg,
 		.free_hndlr	= rxm_buf_close,
+		.unavail_hndlr	= rxm_buf_handle_unavail,
 		.ctx		= pool,
 		.track_used	= 0,
 	};
@@ -1201,6 +1210,7 @@ rxm_ep_emulate_inject(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 			rxm_ep_do_progress(&rxm_ep->util_ep);
 		rxm_tx_buf_release(rxm_ep, RXM_BUF_POOL_TX, tx_buf);
 	}
+
 	return ret;
 }
 
@@ -2219,14 +2229,7 @@ static void rxm_ep_sar_init(struct rxm_ep *rxm_ep)
 
 static void rxm_ep_settings_init(struct rxm_ep *rxm_ep)
 {
-	size_t max_prog_val;
-
 	assert(rxm_ep->msg_info);
-
-	max_prog_val = MIN(rxm_ep->msg_info->tx_attr->size,
-			   rxm_ep->msg_info->rx_attr->size) / 2;
-	rxm_ep->comp_per_progress = (rxm_ep->comp_per_progress > max_prog_val) ?
-				    max_prog_val : rxm_ep->comp_per_progress;
 
 	rxm_ep->msg_mr_local = ofi_mr_local(rxm_ep->msg_info);
 	rxm_ep->rxm_mr_local = ofi_mr_local(rxm_ep->rxm_info);
@@ -2257,12 +2260,10 @@ static void rxm_ep_settings_init(struct rxm_ep *rxm_ep)
  	FI_INFO(&rxm_prov, FI_LOG_CORE,
 		"Settings:\n"
 		"\t\t MR local: MSG - %d, RxM - %d\n"
-		"\t\t Completions per progress: MSG - %zu\n"
 		"\t\t Protocol limits: MSG Inject - %zu, "
 				      "Eager - %zu, "
 				      "SAR - %zu\n",
 		rxm_ep->msg_mr_local, rxm_ep->rxm_mr_local,
-		rxm_ep->comp_per_progress,
 		rxm_ep->inject_limit, rxm_ep->eager_limit, rxm_ep->sar_limit);
 }
 
@@ -2431,10 +2432,6 @@ int rxm_endpoint(struct fid_domain *domain, struct fi_info *info,
 		ret = -FI_ENOMEM;
 		goto err1;
 	}
-
-	if (fi_param_get_int(&rxm_prov, "comp_per_progress",
-			     (int *)&rxm_ep->comp_per_progress))
-		rxm_ep->comp_per_progress = 1;
 
 	ret = ofi_endpoint_init(domain, &rxm_util_prov, info, &rxm_ep->util_ep,
 				context, &rxm_ep_progress);

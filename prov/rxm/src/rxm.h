@@ -654,7 +654,6 @@ struct rxm_ep {
 	struct fid_cq 		*msg_cq;
 	int			msg_cq_fd;
 	struct fid_ep 		*srx_ctx;
-	size_t 			comp_per_progress;
 	int			msg_mr_local;
 	int			rxm_mr_local;
 	size_t			min_multi_recv_size;
@@ -725,6 +724,7 @@ void rxm_cq_write_error(struct util_cq *cq, struct util_cntr *cntr,
 			void *op_context, int err);
 void rxm_ep_progress(struct util_ep *util_ep);
 void rxm_ep_do_progress(struct util_ep *util_ep);
+void rxm_ep_do_progress_cq(struct rxm_ep *rxm_ep);
 
 int rxm_ep_prepost_buf(struct rxm_ep *rxm_ep, struct fid_ep *msg_ep);
 
