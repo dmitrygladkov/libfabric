@@ -279,6 +279,7 @@ struct util_buf_attr {
 	void 				*ctx;
 	uint8_t				track_used;
 	uint8_t				is_mmap_region;
+	uint8_t				garbage_collector;
 	struct {
 		uint8_t			used;
 		/* if the `ordered` capability is used, the buffer
@@ -291,12 +292,16 @@ struct util_buf_pool {
 	size_t 			entry_sz;
 	size_t 			num_allocated;
 	union {
-		struct slist		buffers;
+		union {
+			struct slist		slist;
+			struct dlist_entry	dlist;
+		} buffers;
 		struct dlist_entry	regions;
 	} list;
 	struct util_buf_region	**regions_table;
 	size_t			regions_cnt;
 	struct util_buf_attr	attr;
+	struct util_buf_region *ptr_region_for_free;
 };
 
 struct util_buf_region {
@@ -306,9 +311,7 @@ struct util_buf_region {
 	size_t size;
 	void *context;
 	struct util_buf_pool *pool;
-#ifndef NDEBUG
 	size_t num_used;
-#endif
 };
 
 struct util_buf_footer {
@@ -358,20 +361,83 @@ static inline void *util_buf_get_data(struct util_buf_pool *pool,
 static inline void *util_buf_get(struct util_buf_pool *pool)
 {
 	struct util_buf_footer *buf_ftr;
+	assert(pool->attr.garbage_collector);
 
 	assert(!pool->attr.indexing.ordered);
 
-	slist_remove_head_container(&pool->list.buffers, struct util_buf_footer,
+	slist_remove_head_container(&pool->list.buffers.slist, struct util_buf_footer,
 				    buf_ftr, entry.slist);
 	assert(++buf_ftr->region->num_used);
 	return util_buf_get_data(pool, buf_ftr);
+}
+
+static inline void *util_buf_gc_get(struct util_buf_pool *pool)
+{
+	struct util_buf_footer *buf_ftr;
+	assert(pool->attr.garbage_collector);
+
+	assert(!pool->attr.indexing.ordered);
+	dlist_pop_front(&pool->list.buffers.dlist, struct util_buf_footer, 
+			buf_ftr, entry.dlist);
+	++buf_ftr->region->num_used;
+	assert(buf_ftr->region->num_used);
+	if (buf_ftr->region == pool->ptr_region_for_free)
+		pool->ptr_region_for_free = NULL;
+	return util_buf_get_data(pool, buf_ftr);
+}
+
+static inline void util_buf_free_region(struct util_buf_pool *pool, void *buf)
+{
+	int ret;
+	int i;
+
+	if (util_buf_get_ftr(pool, buf)->region->num_used == 0) {	    
+		if (pool->ptr_region_for_free == NULL) 
+			pool->ptr_region_for_free = util_buf_get_ftr(pool, buf)->region;
+		else {
+			for (i = 0; i < pool->attr.chunk_cnt; i++) {
+				void* util_buf;
+				util_buf = pool->ptr_region_for_free->mem_region + i * pool->entry_sz;
+				dlist_remove(&util_buf_get_ftr(pool,util_buf)->entry.dlist);
+			}
+
+			for (i = 0; i < pool->regions_cnt; i++) {
+				if (pool->regions_table[i] == pool->ptr_region_for_free)
+					pool->regions_table[i] = NULL;
+			}
+
+			if (pool->attr.free_hndlr)
+				pool->attr.free_hndlr(pool->attr.ctx, pool->ptr_region_for_free->context);
+			if (pool->attr.is_mmap_region) {
+				ret = ofi_free_hugepage_buf(pool->ptr_region_for_free->mem_region,
+							    pool->ptr_region_for_free->size);
+				if (ret) {
+					assert(0);
+				}
+			} else {
+				ofi_freealign(pool->ptr_region_for_free->mem_region);
+			}
+
+			free(pool->ptr_region_for_free);
+			pool->ptr_region_for_free = util_buf_get_ftr(pool, buf)->region;
+		}
+	}
 }
 
 static inline void util_buf_release(struct util_buf_pool *pool, void *buf)
 {
 	assert(util_buf_get_ftr(pool, buf)->region->num_used--);
 	assert(!pool->attr.indexing.ordered);
-	slist_insert_head(&util_buf_get_ftr(pool, buf)->entry.slist, &pool->list.buffers);
+	slist_insert_head(&util_buf_get_ftr(pool, buf)->entry.slist, &pool->list.buffers.slist);
+}
+
+static inline void util_buf_gc_release(struct util_buf_pool *pool, void *buf)
+{
+	assert(util_buf_get_ftr(pool, buf)->region->num_used);
+	util_buf_get_ftr(pool, buf)->region->num_used--;
+	assert(!pool->attr.indexing.ordered);
+	dlist_insert_tail(&util_buf_get_ftr(pool, buf)->entry.dlist, &pool->list.buffers.dlist);
+	util_buf_free_region(pool,buf);
 }
 
 static inline void *util_buf_indexed_get(struct util_buf_pool *pool)
@@ -438,7 +504,12 @@ static inline void *util_buf_get_ctx(struct util_buf_pool *pool, void *buf)
 
 static inline int util_buf_avail(struct util_buf_pool *pool)
 {
-	return !slist_empty(&pool->list.buffers);
+	return !slist_empty(&pool->list.buffers.slist);
+}
+
+static inline int util_buf_gc_avail(struct util_buf_pool *pool)
+{
+	return !dlist_empty(&pool->list.buffers.dlist);
 }
 
 static inline int util_buf_indexed_avail(struct util_buf_pool *pool)
@@ -478,6 +549,7 @@ static inline void *util_buf ## name ## alloc_ex(struct util_buf_pool *pool,	\
 
 UTIL_BUF_DEFINE_GETTERS(_);
 UTIL_BUF_DEFINE_GETTERS(_indexed_);
+UTIL_BUF_DEFINE_GETTERS(_gc_);
 
 void util_buf_pool_destroy(struct util_buf_pool *pool);
 

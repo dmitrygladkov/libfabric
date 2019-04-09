@@ -132,11 +132,10 @@ int util_buf_grow(struct util_buf_pool *pool)
 		if (pool->attr.init) {
 #if ENABLE_DEBUG
 			if (!pool->attr.indexing.ordered) {
-				buf_ftr->entry.slist.next = (void *) OFI_MAGIC_64;
-
+				buf_ftr->entry.dlist.next = (void *) OFI_MAGIC_64;
 				pool->attr.init(pool->attr.ctx, buf);
 
-				assert(buf_ftr->entry.slist.next == (void *) OFI_MAGIC_64);
+				assert(buf_ftr->entry.dlist.next == (void *) OFI_MAGIC_64);
 			} else {
 				buf_ftr->entry.dlist.next = (void *) OFI_MAGIC_64;
 				buf_ftr->entry.dlist.prev = (void *) OFI_MAGIC_64;
@@ -154,8 +153,13 @@ int util_buf_grow(struct util_buf_pool *pool)
 		buf_ftr->region = buf_region;
 		buf_ftr->index = pool->num_allocated + i;
 		if (!pool->attr.indexing.ordered) {
-			slist_insert_tail(&buf_ftr->entry.slist,
-					  &pool->list.buffers);
+			if (!pool->attr.garbage_collector)
+				slist_insert_tail(&buf_ftr->entry.slist,
+						    &pool->list.buffers.slist);
+			else
+				dlist_insert_tail(&buf_ftr->entry.dlist,
+						    &pool->list.buffers.dlist);
+			
 		} else {
 			dlist_insert_tail(&buf_ftr->entry.dlist,
 					  &buf_region->buf_list);
@@ -189,6 +193,7 @@ int util_buf_pool_create_attr(struct util_buf_attr *attr,
 	if (!*buf_pool)
 		return -FI_ENOMEM;
 
+	(*buf_pool)->ptr_region_for_free = NULL;
 	(*buf_pool)->attr = *attr;
 
 	entry_sz = (attr->size + sizeof(struct util_buf_footer));
@@ -201,10 +206,14 @@ int util_buf_pool_create_attr(struct util_buf_attr *attr,
 	else
 		(*buf_pool)->attr.is_mmap_region = 1;
 
-	if (!(*buf_pool)->attr.indexing.ordered)
-		slist_init(&(*buf_pool)->list.buffers);
-	else
+	if (!(*buf_pool)->attr.indexing.ordered) {
+		if (!(*buf_pool)->attr.garbage_collector)
+			slist_init(&(*buf_pool)->list.buffers.slist);
+		else
+			dlist_init(&(*buf_pool)->list.buffers.dlist);
+	} else {
 		dlist_init(&(*buf_pool)->list.regions);
+	}
 
 	return FI_SUCCESS;
 }
@@ -241,6 +250,8 @@ void util_buf_pool_destroy(struct util_buf_pool *pool)
 
 	for (i = 0; i < pool->regions_cnt; i++) {
 		buf_region = pool->regions_table[i];
+		if (!buf_region)
+			continue;
 #if ENABLE_DEBUG
 		if (pool->attr.track_used)
 			assert(buf_region->num_used == 0);
